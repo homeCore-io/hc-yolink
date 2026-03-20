@@ -35,6 +35,8 @@ pub struct Bridge {
     publisher: HomecorePublisher,
     temp_unit: TemperatureUnit,
     poll_interval: Duration,
+    /// Delay between successive per-device getState calls to avoid hub rate limits.
+    poll_device_delay: Duration,
 }
 
 impl Bridge {
@@ -44,6 +46,7 @@ impl Bridge {
         publisher: HomecorePublisher,
         temp_unit: TemperatureUnit,
         poll_interval_secs: u64,
+        poll_device_delay_ms: u64,
     ) -> Self {
         let mut devices = Vec::with_capacity(raw.len());
         let mut index = HashMap::new();
@@ -61,6 +64,7 @@ impl Bridge {
             publisher,
             temp_unit,
             poll_interval: Duration::from_secs(poll_interval_secs),
+            poll_device_delay: Duration::from_millis(poll_device_delay_ms),
         }
     }
 
@@ -212,6 +216,10 @@ impl Bridge {
         for dev in &self.devices {
             if !dev.kind.is_supported() {
                 continue;
+            }
+
+            if !self.poll_device_delay.is_zero() {
+                tokio::time::sleep(self.poll_device_delay).await;
             }
 
             match self.yolink_api.get_device_state(&dev.info).await {

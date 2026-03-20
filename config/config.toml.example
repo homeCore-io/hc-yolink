@@ -28,6 +28,10 @@ mode = "local"
 # MQTT push events are the primary delivery mechanism; this is a safety true-up.
 poll_interval_secs = 300
 
+# Delay between successive per-device getState calls during a poll cycle (ms).
+# Increase if the hub returns 000201 "Cannot connect to device" rate-limit errors.
+poll_device_delay_ms = 1000
+
 # Temperature unit published to HomeCore.
 # Devices report their own native unit; this plugin always converts.
 # "F" = Fahrenheit (default)

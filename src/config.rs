@@ -115,6 +115,11 @@ pub struct YolinkConfig {
     #[serde(default = "default_poll_interval")]
     pub poll_interval_secs: u64,
 
+    /// Delay between individual device polls (milliseconds).
+    /// Prevents 000201 "Cannot connect to device" rate-limit errors from the hub.
+    #[serde(default = "default_poll_device_delay_ms")]
+    pub poll_device_delay_ms: u64,
+
     /// Unit used when publishing temperature values to HomeCore.
     #[serde(default)]
     pub temperature_unit: TemperatureUnit,
@@ -124,6 +129,7 @@ pub struct YolinkConfig {
 }
 
 fn default_poll_interval() -> u64 { 300 }
+fn default_poll_device_delay_ms() -> u64 { 1000 }
 
 // ---------------------------------------------------------------------------
 // Cloud mode (YS1603 / YS1605)
