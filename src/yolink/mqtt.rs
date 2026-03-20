@@ -13,12 +13,19 @@ use crate::auth::TokenManager;
 pub struct YolinkMqtt {
     host: String,
     port: u16,
+    /// YoLink Client ID — used as the MQTT *username* (token is the password).
+    yolink_client_id: String,
     tokens: Arc<TokenManager>,
 }
 
 impl YolinkMqtt {
-    pub fn new(host: String, port: u16, tokens: Arc<TokenManager>) -> Self {
-        Self { host, port, tokens }
+    pub fn new(
+        host: String,
+        port: u16,
+        yolink_client_id: String,
+        tokens: Arc<TokenManager>,
+    ) -> Self {
+        Self { host, port, yolink_client_id, tokens }
     }
 
     /// Drive the MQTT event loop forever, reconnecting on error.
@@ -48,13 +55,13 @@ impl YolinkMqtt {
         tx: &mpsc::Sender<YolinkReport>,
     ) -> Result<()> {
         let token = self.tokens.get_token().await?;
-        // Access token as MQTT username; empty password (local hub also accepts this)
-        let client_id = format!("hc-yolink-{}", &Uuid::new_v4().to_string()[..8]);
+        // Local hub (and cloud): username = YoLink Client ID, password = access token
+        let session_id = format!("hc-yolink-{}", &Uuid::new_v4().to_string()[..8]);
 
-        let mut opts = MqttOptions::new(&client_id, &self.host, self.port);
+        let mut opts = MqttOptions::new(&session_id, &self.host, self.port);
         opts.set_keep_alive(Duration::from_secs(30));
         opts.set_clean_session(true);
-        opts.set_credentials(&token, "");
+        opts.set_credentials(&self.yolink_client_id, &token);
 
         let (client, mut eventloop) = AsyncClient::new(opts, 128);
 

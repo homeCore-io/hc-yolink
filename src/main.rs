@@ -108,7 +108,7 @@ async fn try_start(cfg: &Config) -> Result<()> {
 
     // --- YoLink MQTT event stream ---------------------------------------------
     let (yolink_tx, yolink_rx) = mpsc::channel::<YolinkReport>(256);
-    let yl_mqtt = YolinkMqtt::new(ep.mqtt_host.clone(), ep.mqtt_port, tokens.clone());
+    let yl_mqtt = YolinkMqtt::new(ep.mqtt_host.clone(), ep.mqtt_port, ep.client_id.clone(), tokens.clone());
     tokio::spawn(yl_mqtt.run(topic_prefix, yolink_tx));
 
     // --- HomeCore MQTT --------------------------------------------------------
