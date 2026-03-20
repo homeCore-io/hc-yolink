@@ -1,0 +1,30 @@
+[package]
+name        = "hc-yolink"
+version     = "0.1.0"
+edition     = "2021"
+description = "HomeCore plugin for YoLink/YoSmart devices (cloud and local API)"
+
+[[bin]]
+name = "hc-yolink"
+path = "src/main.rs"
+
+[dependencies]
+tokio            = { version = "1",    features = ["full"] }
+rumqttc          = "0.24"
+reqwest          = { version = "0.12", features = ["json"] }
+serde            = { version = "1",    features = ["derive"] }
+serde_json       = "1"
+toml             = "0.8"
+anyhow           = "1"
+thiserror        = "1"
+tracing          = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid             = { version = "1",    features = ["v4"] }
+chrono           = { version = "0.4",  features = ["serde"] }
+
+# Exclude from the parent workspace — this is a standalone repo
+[workspace]
+
+[profile.release]
+opt-level = 3
+strip     = true
