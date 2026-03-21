@@ -77,8 +77,13 @@ impl Bridge {
         mut yolink_rx: mpsc::Receiver<YolinkReport>,
         mut homecore_rx: mpsc::Receiver<(String, Value)>,
     ) -> Result<()> {
+        // Startup poll — get fresh state for all devices immediately so HomeCore
+        // has current attributes before the first periodic interval fires.
+        info!("Bridge startup: polling {} devices for initial state", self.devices.len());
+        self.poll_all_devices().await;
+
         let mut poll_timer = tokio::time::interval(self.poll_interval);
-        // Skip the immediate first tick so we don't poll right after startup
+        // Skip the immediate first tick (we just polled above).
         poll_timer.tick().await;
 
         info!("Bridge event loop running ({} devices)", self.devices.len());
