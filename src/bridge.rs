@@ -188,6 +188,14 @@ impl Bridge {
             if let Err(e) = self.publisher.publish_state_partial(&dev.hc_id, &patch).await {
                 warn!(hc_id = %dev.hc_id, error = %e, "Failed to publish state partial");
             }
+        } else {
+            warn!(
+                hc_id = %dev.hc_id,
+                event = %report.event,
+                kind  = ?dev.kind,
+                raw   = %report.data,
+                "MQTT report: translate_state returned None — raw report data logged above"
+            );
         }
     }
 
@@ -238,6 +246,13 @@ impl Bridge {
                         if let Err(e) = self.publisher.publish_state(&dev.hc_id, &state).await {
                             warn!(hc_id = %dev.hc_id, error = %e, "Poll: failed to publish state");
                         }
+                    } else {
+                        warn!(
+                            hc_id = %dev.hc_id,
+                            kind  = ?dev.kind,
+                            raw   = %data,
+                            "Poll: translate_state returned None — raw getState response logged above"
+                        );
                     }
                 }
                 Err(e) => {

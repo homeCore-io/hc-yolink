@@ -282,20 +282,37 @@ fn translate_vibration_sensor(data: &Value) -> Option<Value> {
 }
 
 fn translate_lock(data: &Value) -> Option<Value> {
-    // MQTT report: data["state"] = "locked" (flat string)
-    // getState API: data["state"] = { "state": "locked", "battery": 3, ... }
-    let lock_str = data["state"]["state"]
+    // LockV2 MQTT/getState: data["state"] = {"lock": "locked"/"unlocked", "door": "open"/"closed"}
+    // Legacy Lock flat MQTT: data["state"] = "locked"/"unlocked" (string)
+    let lock_str = data["state"]["lock"]
         .as_str()
         .or_else(|| data["state"].as_str())?;
     let locked = lock_str == "locked";
     let mut out = serde_json::json!({ "locked": locked });
+
+    // Battery: top-level for LockV2 (0–4 scale → %)
     if let Some(b) = battery_pct(data) {
         out["battery"] = b;
     }
-    // Additional lock attributes when present (getState or detailed reports)
-    if let Some(alarm) = data["state"]["rlAlarm"].as_bool() {
-        out["alarm"] = serde_json::json!(alarm);
+
+    // Door contact sensor (separate from the bolt)
+    if let Some(door) = data["state"]["door"].as_str() {
+        out["door_open"] = serde_json::json!(door == "open");
     }
+
+    // Last alert (e.g. "UnLockFailed", "LockFailed", "DoorOpenAlarm")
+    if let Some(alert) = data["alert"]["type"].as_str() {
+        out["last_alert"] = serde_json::json!(alert);
+    }
+
+    // Lock configuration attributes
+    if let Some(v) = data["attributes"]["autoLock"].as_u64() {
+        out["auto_lock_secs"] = serde_json::json!(v);
+    }
+    if let Some(v) = data["attributes"]["soundLevel"].as_u64() {
+        out["sound_level"] = serde_json::json!(v);
+    }
+
     Some(out)
 }
 
@@ -409,8 +426,38 @@ mod tests {
     }
 
     #[test]
-    fn lock_locked_flat() {
-        // MQTT report format
+    fn lockv2_unlocked_with_door_open() {
+        // Real LockV2 MQTT/getState format
+        let data = json!({
+            "state": { "lock": "unlocked", "door": "open" },
+            "battery": 4,
+            "alert": { "source": "Fingerprint", "type": "UnLockFailed" },
+            "attributes": { "autoLock": 10, "soundLevel": 2 }
+        });
+        let state = DeviceKind::LockV2.translate_state(&data, &TemperatureUnit::F).unwrap();
+        assert_eq!(state["locked"], json!(false));
+        assert_eq!(state["door_open"], json!(true));
+        assert_eq!(state["battery"], json!(100)); // 4 * 25 = 100%
+        assert_eq!(state["last_alert"], json!("UnLockFailed"));
+        assert_eq!(state["auto_lock_secs"], json!(10));
+        assert_eq!(state["sound_level"], json!(2));
+    }
+
+    #[test]
+    fn lockv2_locked_door_closed() {
+        let data = json!({
+            "state": { "lock": "locked", "door": "closed" },
+            "battery": 3
+        });
+        let state = DeviceKind::LockV2.translate_state(&data, &TemperatureUnit::F).unwrap();
+        assert_eq!(state["locked"], json!(true));
+        assert_eq!(state["door_open"], json!(false));
+        assert_eq!(state["battery"], json!(75)); // 3 * 25 = 75%
+    }
+
+    #[test]
+    fn lock_flat_string_state() {
+        // Legacy Lock flat format: data["state"] is a string
         let data = json!({ "state": "locked", "battery": 3 });
         let state = DeviceKind::Lock.translate_state(&data, &TemperatureUnit::F).unwrap();
         assert_eq!(state["locked"], json!(true));
@@ -418,27 +465,9 @@ mod tests {
     }
 
     #[test]
-    fn lock_unlocked_flat() {
-        let data = json!({ "state": "unlocked", "battery": 2 });
-        let state = DeviceKind::Lock.translate_state(&data, &TemperatureUnit::F).unwrap();
-        assert_eq!(state["locked"], json!(false));
-        assert_eq!(state["battery"], json!(50));
-    }
-
-    #[test]
-    fn lock_locked_nested_getstate() {
-        // getState response: data["state"] is a nested object
-        let data = json!({ "state": { "state": "locked", "battery": 4, "rlAlarm": false }, "online": true });
-        let state = DeviceKind::Lock.translate_state(&data, &TemperatureUnit::F).unwrap();
-        assert_eq!(state["locked"], json!(true));
-        assert_eq!(state["battery"], json!(100));
-        assert_eq!(state["alarm"], json!(false));
-    }
-
-    #[test]
     fn lock_battery_zero_pct() {
-        let data = json!({ "state": { "state": "locked", "battery": 0 }, "online": true });
-        let state = DeviceKind::Lock.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let data = json!({ "state": { "lock": "locked", "door": "closed" }, "battery": 0 });
+        let state = DeviceKind::LockV2.translate_state(&data, &TemperatureUnit::F).unwrap();
         assert_eq!(state["battery"], json!(0));
     }
 
