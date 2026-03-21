@@ -155,19 +155,24 @@ fn relay_is_on(state_str: &str) -> bool {
     matches!(state_str, "open" | "on")
 }
 
-/// Extract `data["state"]` as a string, or fall back to the top-level `data`
-/// string (some devices nest, some don't).
+/// Extract the device state string, handling both payload shapes:
+/// - MQTT reports: `data["state"] = "locked"` (flat string)
+/// - getState API: `data["state"] = { "state": "locked", ... }` (nested object)
 fn state_str(data: &Value) -> Option<&str> {
-    data["state"].as_str()
+    data["state"]["state"]
+        .as_str()
+        .or_else(|| data["state"].as_str())
 }
 
-/// Battery level as a number (0–4 in YoLink, 4 = full).
-fn battery(data: &Value) -> Option<Value> {
-    // Prefer data["state"]["battery"], then data["battery"]
+/// Battery level as a percentage (0–100).
+/// YoLink reports battery on a 0–4 scale (4 = full); we convert to percent.
+/// Looks in `data["state"]["battery"]` (getState) and `data["battery"]` (MQTT report).
+fn battery_pct(data: &Value) -> Option<Value> {
     let b = data["state"]["battery"]
         .as_u64()
         .or_else(|| data["battery"].as_u64())?;
-    Some(Value::Number(b.into()))
+    let pct = (b * 25).min(100);
+    Some(Value::Number(pct.into()))
 }
 
 fn translate_switch(data: &Value) -> Option<Value> {
@@ -193,9 +198,9 @@ fn translate_multi_outlet(data: &Value) -> Option<Value> {
 
 fn translate_door_sensor(data: &Value) -> Option<Value> {
     // state == "open" → door open, "close" or "closed" → closed
-    let open = data["state"].as_str().map(|s| s == "open")?;
+    let open = state_str(data).map(|s| s == "open")?;
     let mut out = serde_json::json!({ "open": open });
-    if let Some(b) = battery(data) {
+    if let Some(b) = battery_pct(data) {
         out["battery"] = b;
     }
     Some(out)
@@ -208,7 +213,7 @@ fn translate_motion_sensor(data: &Value) -> Option<Value> {
         .or_else(|| data["state"]["alarm"].as_bool())
         .unwrap_or(false);
     let mut out = serde_json::json!({ "motion": motion });
-    if let Some(b) = battery(data) {
+    if let Some(b) = battery_pct(data) {
         out["battery"] = b;
     }
     Some(out)
@@ -222,7 +227,7 @@ fn translate_leak_sensor(data: &Value) -> Option<Value> {
         .or_else(|| data["state"].as_str().map(|s| s == "alert"))
         .unwrap_or(false);
     let mut out = serde_json::json!({ "leak": leak });
-    if let Some(b) = battery(data) {
+    if let Some(b) = battery_pct(data) {
         out["battery"] = b;
     }
     Some(out)
@@ -258,7 +263,7 @@ fn translate_th_sensor(data: &Value, unit: &TemperatureUnit) -> Option<Value> {
         "temperature_unit": unit.label(),
         "humidity_pct":     round1(humidity),
     });
-    if let Some(b) = battery(data) {
+    if let Some(b) = battery_pct(data) {
         out["battery"] = b;
     }
     Some(out)
@@ -270,17 +275,26 @@ fn translate_vibration_sensor(data: &Value) -> Option<Value> {
         .or_else(|| data["state"]["alarm"].as_bool())
         .unwrap_or(false);
     let mut out = serde_json::json!({ "vibration": vibration });
-    if let Some(b) = battery(data) {
+    if let Some(b) = battery_pct(data) {
         out["battery"] = b;
     }
     Some(out)
 }
 
 fn translate_lock(data: &Value) -> Option<Value> {
-    let locked = data["state"].as_str().map(|s| s == "locked")?;
+    // MQTT report: data["state"] = "locked" (flat string)
+    // getState API: data["state"] = { "state": "locked", "battery": 3, ... }
+    let lock_str = data["state"]["state"]
+        .as_str()
+        .or_else(|| data["state"].as_str())?;
+    let locked = lock_str == "locked";
     let mut out = serde_json::json!({ "locked": locked });
-    if let Some(b) = battery(data) {
+    if let Some(b) = battery_pct(data) {
         out["battery"] = b;
+    }
+    // Additional lock attributes when present (getState or detailed reports)
+    if let Some(alarm) = data["state"]["rlAlarm"].as_bool() {
+        out["alarm"] = serde_json::json!(alarm);
     }
     Some(out)
 }
@@ -335,7 +349,16 @@ mod tests {
         let data = json!({ "state": "open", "battery": 3 });
         let state = DeviceKind::DoorSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
         assert_eq!(state["open"], json!(true));
-        assert_eq!(state["battery"], json!(3));
+        assert_eq!(state["battery"], json!(75)); // 3/4 = 75%
+    }
+
+    #[test]
+    fn door_open_nested_getstate() {
+        // getState response: data["state"] is a nested object
+        let data = json!({ "state": { "state": "open", "battery": 4 }, "online": true });
+        let state = DeviceKind::DoorSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
+        assert_eq!(state["open"], json!(true));
+        assert_eq!(state["battery"], json!(100));
     }
 
     #[test]
@@ -386,10 +409,37 @@ mod tests {
     }
 
     #[test]
-    fn lock_locked() {
+    fn lock_locked_flat() {
+        // MQTT report format
         let data = json!({ "state": "locked", "battery": 3 });
         let state = DeviceKind::Lock.translate_state(&data, &TemperatureUnit::F).unwrap();
         assert_eq!(state["locked"], json!(true));
+        assert_eq!(state["battery"], json!(75));
+    }
+
+    #[test]
+    fn lock_unlocked_flat() {
+        let data = json!({ "state": "unlocked", "battery": 2 });
+        let state = DeviceKind::Lock.translate_state(&data, &TemperatureUnit::F).unwrap();
+        assert_eq!(state["locked"], json!(false));
+        assert_eq!(state["battery"], json!(50));
+    }
+
+    #[test]
+    fn lock_locked_nested_getstate() {
+        // getState response: data["state"] is a nested object
+        let data = json!({ "state": { "state": "locked", "battery": 4, "rlAlarm": false }, "online": true });
+        let state = DeviceKind::Lock.translate_state(&data, &TemperatureUnit::F).unwrap();
+        assert_eq!(state["locked"], json!(true));
+        assert_eq!(state["battery"], json!(100));
+        assert_eq!(state["alarm"], json!(false));
+    }
+
+    #[test]
+    fn lock_battery_zero_pct() {
+        let data = json!({ "state": { "state": "locked", "battery": 0 }, "online": true });
+        let state = DeviceKind::Lock.translate_state(&data, &TemperatureUnit::F).unwrap();
+        assert_eq!(state["battery"], json!(0));
     }
 
     #[test]
