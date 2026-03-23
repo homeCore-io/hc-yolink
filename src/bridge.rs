@@ -106,23 +106,35 @@ impl Bridge {
                     // Name sync runs after state poll; changes applied before next tick.
                     let name_changes = self.detect_name_changes().await;
                     for (idx, new_name) in name_changes {
-                        let dev = &mut self.devices[idx];
-                        let old_name = std::mem::replace(&mut dev.info.name, new_name.clone());
+                        // Snapshot the fields we need before the mutable borrow.
+                        let (hc_id, device_type, old_name) = {
+                            let dev = &self.devices[idx];
+                            (dev.hc_id.clone(), dev.kind.homecore_device_type(), dev.info.name.clone())
+                        };
                         info!(
-                            hc_id      = %dev.hc_id,
+                            hc_id      = %hc_id,
                             old_name   = %old_name,
                             new_name   = %new_name,
                             "Device name changed at source; re-registering with HomeCore"
                         );
-                        // Re-registration triggers the upsert+DeviceNameChanged path in core.
-                        let _ = self.publisher
-                            .register_device(
-                                &dev.hc_id.clone(),
-                                &new_name,
-                                dev.kind.homecore_device_type(),
-                                None,
-                            )
-                            .await;
+                        // Only update the in-memory name after a confirmed successful
+                        // publish.  If registration fails, detect_name_changes() will
+                        // see the mismatch again on the next tick and retry.
+                        match self.publisher
+                            .register_device(&hc_id, &new_name, device_type, None)
+                            .await
+                        {
+                            Ok(_) => {
+                                self.devices[idx].info.name = new_name;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    hc_id  = %hc_id,
+                                    error  = %e,
+                                    "Name change re-registration failed; will retry on next poll"
+                                );
+                            }
+                        }
                     }
                 }
             }
