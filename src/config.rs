@@ -1,6 +1,8 @@
 use anyhow::{bail, Result};
 use serde::Deserialize;
 
+use crate::logging::LoggingConfig;
+
 // ---------------------------------------------------------------------------
 // Top-level
 // ---------------------------------------------------------------------------
@@ -9,6 +11,8 @@ use serde::Deserialize;
 pub struct Config {
     pub homecore: HomecoreConfig,
     pub yolink: YolinkConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
 
 impl Config {
