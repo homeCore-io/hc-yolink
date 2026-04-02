@@ -63,9 +63,10 @@ impl DeviceKind {
     pub fn homecore_device_type(&self) -> &str {
         match self {
             Self::Outlet | Self::SmartPlug | Self::Switch | Self::MultiOutlet => "switch",
-            Self::DoorSensor | Self::MotionSensor | Self::LeakSensor | Self::VibrationSensor => {
-                "binary_sensor"
-            }
+            Self::DoorSensor => "contact_sensor",
+            Self::MotionSensor => "motion_sensor",
+            Self::LeakSensor => "water_sensor",
+            Self::VibrationSensor => "vibration_sensor",
             Self::THSensor => "temperature_sensor",
             Self::Lock | Self::LockV2 => "lock",
             Self::Siren => "switch",
@@ -199,7 +200,10 @@ fn translate_multi_outlet(data: &Value) -> Option<Value> {
 fn translate_door_sensor(data: &Value) -> Option<Value> {
     // state == "open" → door open, "close" or "closed" → closed
     let open = state_str(data).map(|s| s == "open")?;
-    let mut out = serde_json::json!({ "open": open });
+    let mut out = serde_json::json!({
+        "open": open,
+        "contact": open,
+    });
     if let Some(b) = battery_pct(data) {
         out["battery"] = b;
     }
@@ -226,7 +230,10 @@ fn translate_leak_sensor(data: &Value) -> Option<Value> {
         .or_else(|| data["state"]["alarm"].as_bool())
         .or_else(|| data["state"].as_str().map(|s| s == "alert"))
         .unwrap_or(false);
-    let mut out = serde_json::json!({ "leak": leak });
+    let mut out = serde_json::json!({
+        "leak": leak,
+        "water_detected": leak,
+    });
     if let Some(b) = battery_pct(data) {
         out["battery"] = b;
     }
@@ -366,6 +373,7 @@ mod tests {
         let data = json!({ "state": "open", "battery": 3 });
         let state = DeviceKind::DoorSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
         assert_eq!(state["open"], json!(true));
+        assert_eq!(state["contact"], json!(true));
         assert_eq!(state["battery"], json!(75)); // 3/4 = 75%
     }
 
@@ -375,6 +383,7 @@ mod tests {
         let data = json!({ "state": { "state": "open", "battery": 4 }, "online": true });
         let state = DeviceKind::DoorSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
         assert_eq!(state["open"], json!(true));
+        assert_eq!(state["contact"], json!(true));
         assert_eq!(state["battery"], json!(100));
     }
 
@@ -383,6 +392,7 @@ mod tests {
         let data = json!({ "state": "close", "battery": 4 });
         let state = DeviceKind::DoorSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
         assert_eq!(state["open"], json!(false));
+        assert_eq!(state["contact"], json!(false));
     }
 
     #[test]
@@ -390,6 +400,14 @@ mod tests {
         let data = json!({ "alarm": true, "battery": 2 });
         let state = DeviceKind::MotionSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
         assert_eq!(state["motion"], json!(true));
+    }
+
+    #[test]
+    fn leak_sensor_sets_canonical_and_legacy_keys() {
+        let data = json!({ "alarm": true, "battery": 2 });
+        let state = DeviceKind::LeakSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
+        assert_eq!(state["leak"], json!(true));
+        assert_eq!(state["water_detected"], json!(true));
     }
 
     #[test]

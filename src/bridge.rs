@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -21,6 +21,7 @@ struct Device {
     kind: DeviceKind,
     /// HomeCore device ID: "yolink_{yolink_device_id}"
     hc_id: String,
+    retired: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +55,12 @@ impl Bridge {
         for (info, kind) in raw {
             let hc_id = format!("yolink_{}", info.device_id);
             index.insert(info.device_id.clone(), devices.len());
-            devices.push(Device { info, kind, hc_id });
+            devices.push(Device {
+                info,
+                kind,
+                hc_id,
+                retired: false,
+            });
         }
 
         Self {
@@ -103,73 +109,130 @@ impl Bridge {
                 // Periodic true-up: state refresh + device name sync
                 _ = poll_timer.tick() => {
                     self.poll_all_devices().await;
-                    // Name sync runs after state poll; changes applied before next tick.
-                    let name_changes = self.detect_name_changes().await;
-                    for (idx, new_name) in name_changes {
-                        // Snapshot the fields we need before the mutable borrow.
-                        let (hc_id, device_type, old_name) = {
-                            let dev = &self.devices[idx];
-                            (dev.hc_id.clone(), dev.kind.homecore_device_type(), dev.info.name.clone())
-                        };
-                        info!(
-                            hc_id      = %hc_id,
-                            old_name   = %old_name,
-                            new_name   = %new_name,
-                            "Device name changed at source; re-registering with HomeCore"
-                        );
-                        // Only update the in-memory name after a confirmed successful
-                        // publish.  If registration fails, detect_name_changes() will
-                        // see the mismatch again on the next tick and retry.
-                        match self.publisher
-                            .register_device(&hc_id, &new_name, device_type, None)
-                            .await
-                        {
-                            Ok(_) => {
-                                self.devices[idx].info.name = new_name;
-                            }
-                            Err(e) => {
-                                warn!(
-                                    hc_id  = %hc_id,
-                                    error  = %e,
-                                    "Name change re-registration failed; will retry on next poll"
-                                );
-                            }
-                        }
-                    }
+                    self.sync_inventory().await;
                 }
             }
         }
     }
 
-    /// Fetch the current device list from YoLink and return `(index, new_name)`
-    /// for every device whose name differs from what is stored locally.
-    async fn detect_name_changes(&self) -> Vec<(usize, String)> {
+    async fn sync_inventory(&mut self) {
         let fresh = match self.yolink_api.get_device_list().await {
             Ok(list) => list,
             Err(e) => {
-                warn!(error = %e, "Name sync: get_device_list failed");
-                return vec![];
+                warn!(error = %e, "Inventory sync: get_device_list failed");
+                return;
             }
         };
 
-        // Build a lookup of YoLink device_id → current name from the fresh list.
-        let name_map: std::collections::HashMap<&str, &str> = fresh
+        let mut seen = HashSet::new();
+
+        for info in fresh {
+            let kind = DeviceKind::from_yolink_type(&info.device_type);
+            if !kind.is_supported() {
+                continue;
+            }
+
+            let device_id = info.device_id.clone();
+            seen.insert(device_id.clone());
+
+            if let Some(&idx) = self.index.get(&device_id) {
+                let (hc_id, old_name, needs_reregister) = {
+                    let dev = &self.devices[idx];
+                    (
+                        dev.hc_id.clone(),
+                        dev.info.name.clone(),
+                        dev.info.name != info.name
+                            || dev.kind.homecore_device_type() != kind.homecore_device_type(),
+                    )
+                };
+
+                if needs_reregister {
+                    info!(
+                        hc_id = %hc_id,
+                        old_name = %old_name,
+                        new_name = %info.name,
+                        "YoLink device metadata changed; re-registering with HomeCore"
+                    );
+                    if let Err(e) = self
+                        .publisher
+                        .register_device(&hc_id, &info.name, kind.homecore_device_type(), None)
+                        .await
+                    {
+                        warn!(
+                            hc_id = %hc_id,
+                            error = %e,
+                            "Inventory sync: failed to re-register device metadata"
+                        );
+                        continue;
+                    }
+                }
+
+                let dev = &mut self.devices[idx];
+                dev.info = info;
+                dev.kind = kind;
+                dev.retired = false;
+                continue;
+            }
+
+            let hc_id = format!("yolink_{device_id}");
+            info!(hc_id = %hc_id, name = %info.name, "New YoLink device discovered; registering");
+            if let Err(e) = self
+                .publisher
+                .register_device(&hc_id, &info.name, kind.homecore_device_type(), None)
+                .await
+            {
+                warn!(hc_id = %hc_id, error = %e, "Inventory sync: register_device failed");
+                continue;
+            }
+            if let Err(e) = self.publisher.subscribe_commands(&hc_id).await {
+                warn!(hc_id = %hc_id, error = %e, "Inventory sync: subscribe_commands failed");
+            }
+
+            match self.yolink_api.get_device_state(&info).await {
+                Ok(data) => {
+                    let online = data["online"].as_bool().unwrap_or(true);
+                    let _ = self.publisher.publish_availability(&hc_id, online).await;
+                    if let Some(state) = kind.translate_state(&data, &self.temp_unit) {
+                        let _ = self.publisher.publish_state(&hc_id, &state).await;
+                    }
+                }
+                Err(e) => {
+                    warn!(hc_id = %hc_id, error = %e, "Inventory sync: initial state fetch failed");
+                    let _ = self.publisher.publish_availability(&hc_id, false).await;
+                }
+            }
+
+            self.index.insert(device_id, self.devices.len());
+            self.devices.push(Device {
+                info,
+                kind,
+                hc_id,
+                retired: false,
+            });
+        }
+
+        let missing: Vec<(String, usize)> = self
+            .index
             .iter()
-            .map(|d| (d.device_id.as_str(), d.name.as_str()))
+            .filter_map(|(device_id, &idx)| {
+                (!seen.contains(device_id.as_str())).then_some((device_id.clone(), idx))
+            })
             .collect();
 
-        self.devices
-            .iter()
-            .enumerate()
-            .filter_map(|(i, dev)| {
-                let new_name = *name_map.get(dev.info.device_id.as_str())?;
-                if new_name != dev.info.name.as_str() {
-                    Some((i, new_name.to_string()))
-                } else {
-                    None
-                }
-            })
-            .collect()
+        for (device_id, idx) in missing {
+            self.index.remove(&device_id);
+            if self.devices[idx].retired {
+                continue;
+            }
+            let hc_id = self.devices[idx].hc_id.clone();
+            info!(hc_id = %hc_id, "YoLink device missing from inventory; unregistering");
+            if let Err(e) = self.publisher.unregister_device(&hc_id).await {
+                warn!(hc_id = %hc_id, error = %e, "Inventory sync: unregister_device failed");
+                self.index.insert(device_id, idx);
+                continue;
+            }
+            self.devices[idx].retired = true;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -239,6 +302,9 @@ impl Bridge {
         info!("Polling {} devices for state true-up", self.devices.len());
 
         for dev in &self.devices {
+            if dev.retired {
+                continue;
+            }
             if !dev.kind.is_supported() {
                 continue;
             }
