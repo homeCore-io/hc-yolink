@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -21,6 +21,38 @@ pub struct HomecorePublisher {
 }
 
 impl HomecorePublisher {
+    fn with_change(payload: &Value, change: Value) -> Value {
+        let mut payload = match payload.clone() {
+            Value::Object(map) => map,
+            other => return other,
+        };
+        let mut hc = payload
+            .remove("_hc")
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        hc.insert("change".to_string(), change);
+        payload.insert("_hc".to_string(), Value::Object(hc));
+        Value::Object(payload)
+    }
+
+    fn with_default_change(&self, payload: &Value) -> Value {
+        if payload
+            .get("_hc")
+            .and_then(|v| v.get("change"))
+            .is_some()
+        {
+            return payload.clone();
+        }
+
+        Self::with_change(
+            payload,
+            json!({
+                "kind": "external",
+                "source": self.plugin_id,
+            }),
+        )
+    }
+
     async fn clear_retained_topic(&self, topic: String) -> Result<()> {
         self.client
             .publish(topic, QoS::AtLeastOnce, true, Vec::<u8>::new())
@@ -31,7 +63,7 @@ impl HomecorePublisher {
     /// Publish full device state (retained).
     pub async fn publish_state(&self, device_id: &str, state: &Value) -> Result<()> {
         let topic = format!("homecore/devices/{device_id}/state");
-        let payload = serde_json::to_vec(state)?;
+        let payload = serde_json::to_vec(&self.with_default_change(state))?;
         self.client
             .publish(&topic, QoS::AtLeastOnce, true, payload)
             .await
@@ -41,7 +73,7 @@ impl HomecorePublisher {
     /// Publish a partial state update / JSON merge-patch (not retained).
     pub async fn publish_state_partial(&self, device_id: &str, patch: &Value) -> Result<()> {
         let topic = format!("homecore/devices/{device_id}/state/partial");
-        let payload = serde_json::to_vec(patch)?;
+        let payload = serde_json::to_vec(&self.with_default_change(patch))?;
         self.client
             .publish(&topic, QoS::AtLeastOnce, false, payload)
             .await
