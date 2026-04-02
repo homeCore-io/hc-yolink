@@ -240,19 +240,29 @@ impl Bridge {
     // -----------------------------------------------------------------------
 
     async fn handle_yolink_report(&self, report: YolinkReport) {
-        debug!(
-            device_id = %report.device_id,
-            event = %report.event,
-            "YoLink report received"
-        );
-
         let Some(dev) = self.find_by_yolink_id(&report.device_id) else {
             debug!(device_id = %report.device_id, "Report for unknown device, ignoring");
             return;
         };
 
+        debug!(
+            hc_id = %dev.hc_id,
+            yolink_device_id = %report.device_id,
+            event = %report.event,
+            kind = ?dev.kind,
+            raw = %report.data,
+            "YoLink report received"
+        );
+
         // Publish availability if present in the report
         if let Some(online) = report.data["online"].as_bool() {
+            debug!(
+                hc_id = %dev.hc_id,
+                yolink_device_id = %report.device_id,
+                event = %report.event,
+                online,
+                "Publishing availability from YoLink report"
+            );
             if let Err(e) = self.publisher.publish_availability(&dev.hc_id, online).await {
                 warn!(hc_id = %dev.hc_id, error = %e, "Failed to publish availability");
             }
@@ -260,6 +270,14 @@ impl Bridge {
 
         // Translate and publish state as a partial update (merge-patch)
         if let Some(patch) = dev.kind.translate_state(&report.data, &self.temp_unit) {
+            debug!(
+                hc_id = %dev.hc_id,
+                yolink_device_id = %report.device_id,
+                event = %report.event,
+                kind = ?dev.kind,
+                patch = %patch,
+                "Publishing state patch from YoLink report"
+            );
             if let Err(e) = self.publisher.publish_state_partial(&dev.hc_id, &patch).await {
                 warn!(hc_id = %dev.hc_id, error = %e, "Failed to publish state partial");
             }
@@ -283,8 +301,24 @@ impl Bridge {
             return;
         };
 
+        debug!(
+            hc_id = %hc_id,
+            yolink_device_id = %yolink_id,
+            kind = ?dev.kind,
+            command = %cmd,
+            "HomeCore command received for YoLink device"
+        );
+
         match dev.kind.translate_command(&cmd) {
-            Ok((_method_suffix, params)) => {
+            Ok((method_suffix, params)) => {
+                debug!(
+                    hc_id = %hc_id,
+                    yolink_device_id = %yolink_id,
+                    kind = ?dev.kind,
+                    method_suffix,
+                    params = %params,
+                    "Translated HomeCore command to YoLink request"
+                );
                 // All current controllable types use setState
                 if let Err(e) = self.yolink_api.set_device_state(&dev.info, params).await {
                     warn!(hc_id = %hc_id, error = %e, "YoLink command failed");
@@ -315,12 +349,33 @@ impl Bridge {
 
             match self.yolink_api.get_device_state(&dev.info).await {
                 Ok(data) => {
+                    debug!(
+                        hc_id = %dev.hc_id,
+                        yolink_device_id = %dev.info.device_id,
+                        kind = ?dev.kind,
+                        raw = %data,
+                        "YoLink getState snapshot received"
+                    );
+
                     // Publish availability
                     let online = data["online"].as_bool().unwrap_or(true);
+                    debug!(
+                        hc_id = %dev.hc_id,
+                        yolink_device_id = %dev.info.device_id,
+                        online,
+                        "Publishing availability from YoLink getState snapshot"
+                    );
                     let _ = self.publisher.publish_availability(&dev.hc_id, online).await;
 
                     // Publish full state (retained — this is a ground-truth refresh)
                     if let Some(state) = dev.kind.translate_state(&data, &self.temp_unit) {
+                        debug!(
+                            hc_id = %dev.hc_id,
+                            yolink_device_id = %dev.info.device_id,
+                            kind = ?dev.kind,
+                            state = %state,
+                            "Publishing full state snapshot from YoLink getState"
+                        );
                         if let Err(e) = self.publisher.publish_state(&dev.hc_id, &state).await {
                             warn!(hc_id = %dev.hc_id, error = %e, "Poll: failed to publish state");
                         }
