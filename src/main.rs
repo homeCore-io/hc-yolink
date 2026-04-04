@@ -96,7 +96,9 @@ async fn try_start(cfg: &Config) -> Result<()> {
         ep.client_secret.clone(),
     );
     tokens.init().await?;
-    tokens.clone().spawn_refresh_task();
+    // No background refresh task — get_token() does lazy refresh on demand.
+    // Proactive refresh was causing the YoLink hub to invalidate the active
+    // MQTT session when a new token was issued, dropping the connection.
     info!("YoLink authentication successful");
 
     // --- YoLink API client ----------------------------------------------------

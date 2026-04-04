@@ -4,7 +4,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 // ---------------------------------------------------------------------------
 // Token cache
@@ -66,24 +66,7 @@ impl TokenManager {
         self.fetch_and_store().await
     }
 
-    /// Spawn a background task that pre-refreshes the token before it expires.
-    pub fn spawn_refresh_task(self: Arc<Self>) {
-        tokio::spawn(async move {
-            loop {
-                let sleep_secs = {
-                    let guard = self.cached.read().await;
-                    guard.as_ref().map_or(60, |t| {
-                        let secs = (t.expires_at - Utc::now()).num_seconds() - 60;
-                        secs.max(30) as u64
-                    })
-                };
-                tokio::time::sleep(tokio::time::Duration::from_secs(sleep_secs)).await;
-                if let Err(e) = self.fetch_and_store().await {
-                    warn!(error = %e, "Token refresh failed; will retry");
-                }
-            }
-        });
-    }
+
 
     async fn fetch_and_store(&self) -> Result<String> {
         debug!(url = %self.token_url, "Fetching YoLink access token");
