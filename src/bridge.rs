@@ -83,13 +83,12 @@ impl Bridge {
         mut yolink_rx: mpsc::Receiver<YolinkReport>,
         mut homecore_rx: mpsc::Receiver<(String, Value)>,
     ) -> Result<()> {
-        // Startup poll — get fresh state for all devices immediately so HomeCore
-        // has current attributes before the first periodic interval fires.
-        info!("Bridge startup: polling {} devices for initial state", self.devices.len());
-        self.poll_all_devices().await;
-
+        // Skip initial poll — main.rs already fetched getState for every device
+        // during registration.  Polling again would double the startup API load
+        // and can overwhelm the local hub.
         let mut poll_timer = tokio::time::interval(self.poll_interval);
-        // Skip the immediate first tick (we just polled above).
+        // Consume the immediate first tick so the first real poll fires after
+        // one full interval.
         poll_timer.tick().await;
 
         info!("Bridge event loop running ({} devices)", self.devices.len());
@@ -186,6 +185,11 @@ impl Bridge {
             }
             if let Err(e) = self.publisher.subscribe_commands(&hc_id).await {
                 warn!(hc_id = %hc_id, error = %e, "Inventory sync: subscribe_commands failed");
+            }
+
+            // Rate-limit new device state fetch to avoid overwhelming the hub.
+            if !self.poll_device_delay.is_zero() {
+                tokio::time::sleep(self.poll_device_delay).await;
             }
 
             match self.yolink_api.get_device_state(&info).await {

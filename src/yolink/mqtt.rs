@@ -35,15 +35,27 @@ impl YolinkMqtt {
     /// - Cloud: `yl-home/{home_id}`
     /// - Local: `ylsubnet/{net_id}`
     pub async fn run(self, topic_prefix: String, tx: mpsc::Sender<YolinkReport>) {
+        const MIN_BACKOFF: u64 = 10;
+        const MAX_BACKOFF: u64 = 60;
+        /// A connection lasting this long resets the backoff.
+        const HEALTHY_UPTIME: Duration = Duration::from_secs(60);
+
+        let mut backoff_secs = MIN_BACKOFF;
+
         loop {
+            let started = std::time::Instant::now();
             match self.run_once(&topic_prefix, &tx).await {
                 Ok(()) => {
                     // tx closed — shutting down
                     return;
                 }
                 Err(e) => {
-                    error!(error = %e, "YoLink MQTT connection lost; reconnecting in 10 s");
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    if started.elapsed() >= HEALTHY_UPTIME {
+                        backoff_secs = MIN_BACKOFF;
+                    }
+                    error!(error = %e, backoff_secs, "YoLink MQTT connection lost; reconnecting");
+                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                    backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF);
                 }
             }
         }
