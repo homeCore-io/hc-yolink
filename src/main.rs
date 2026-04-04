@@ -159,28 +159,24 @@ async fn try_start(cfg: &Config) -> Result<()> {
         // Subscribe to commands for this device
         publisher.subscribe_commands(&hc_id).await?;
 
-        // Fetch and publish initial state
-        match yolink_api.get_device_state(&info).await {
-            Ok(data) => {
-                let online = data["online"].as_bool().unwrap_or(true);
-                publisher.publish_availability(&hc_id, online).await?;
-
-                if let Some(state) =
-                    kind.translate_state(&data, &cfg.yolink.temperature_unit)
-                {
-                    publisher.publish_state(&hc_id, &state).await?;
-                }
-            }
-            Err(e) => {
-                // Non-fatal: mark offline, continue with other devices
-                tracing::warn!(
-                    device_id = %hc_id,
-                    error = %e,
-                    "Could not fetch initial state; marking offline"
-                );
-                publisher.publish_availability(&hc_id, false).await?;
-            }
-        }
+        // DISABLED: Initial getState calls overwhelm the YoLink SpeakerHub,
+        // causing it to drop the MQTT connection.  Devices will get state from
+        // the first periodic poll or from real-time MQTT reports.
+        //
+        // match yolink_api.get_device_state(&info).await {
+        //     Ok(data) => {
+        //         let online = data["online"].as_bool().unwrap_or(true);
+        //         publisher.publish_availability(&hc_id, online).await?;
+        //         if let Some(state) = kind.translate_state(&data, &cfg.yolink.temperature_unit) {
+        //             publisher.publish_state(&hc_id, &state).await?;
+        //         }
+        //     }
+        //     Err(e) => {
+        //         tracing::warn!(device_id = %hc_id, error = %e, "Could not fetch initial state; marking offline");
+        //         publisher.publish_availability(&hc_id, false).await?;
+        //     }
+        // }
+        publisher.publish_availability(&hc_id, true).await?;
 
         bridged_devices.push((info, kind));
     }
