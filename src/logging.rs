@@ -1,4 +1,4 @@
-//! Configurable log rotation and compression for hc-hue.
+//! Configurable log rotation and compression for hc-yolink.
 //!
 //! Drop-in replacement for the hard-coded `tracing_appender::rolling::daily()`.
 //! Supports time-based rotation (hourly/daily/weekly/never), optional size-based
@@ -41,7 +41,7 @@ pub enum RotationStrategy {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LoggingConfig {
     /// Stderr log level when `RUST_LOG` is not set.
-    /// Accepts any `tracing` filter directive, e.g. `"debug"` or `"hc_hue=debug,rumqttc=warn"`.
+    /// Accepts any `tracing` filter directive, e.g. `"debug"` or `"hc_yolink=debug,rumqttc=warn"`.
     #[serde(default = "default_level")]
     pub level: String,
     /// Time-based rotation strategy: `daily` (default), `hourly`, `weekly`, or `never`.
@@ -218,18 +218,21 @@ fn compress_in_background(src: PathBuf) {
 /// Initialise tracing: stderr layer + rotating compressed file layer.
 ///
 /// - `config_path`: path to `config/config.toml`; derives the `logs/` dir.
-/// - `prefix`: log file name prefix, e.g. `"hc-hue"` → `logs/hc-hue.log`.
+/// - `prefix`: log file name prefix, e.g. `"hc-yolink"` -> `logs/hc-yolink.log`.
 /// - `stderr_default`: filter used for stderr when `RUST_LOG` is unset and
-///   `cfg.level` is the default `"info"`, e.g. `"hc_hue=info"`.
+///   `cfg.level` is the default `"info"`, e.g. `"hc_yolink=info"`.
 /// - `cfg`: `[logging]` config from the plugin config file.
 ///
 /// **The returned `WorkerGuard` must be kept alive for the process lifetime.**
+///
+/// Also returns a [`hc_logging::LogLevelHandle`] for dynamic log level changes
+/// via the plugin management protocol.
 pub fn init_logging(
     config_path:    &str,
     prefix:         &str,
     stderr_default: &str,
     cfg:            &LoggingConfig,
-) -> tracing_appender::non_blocking::WorkerGuard {
+) -> (tracing_appender::non_blocking::WorkerGuard, hc_logging::LogLevelHandle) {
     let log_dir = Path::new(config_path)
         .parent()
         .and_then(|p| p.parent())
@@ -251,17 +254,22 @@ pub fn init_logging(
 
     // When RUST_LOG is not set: use cfg.level if the user changed it from the
     // default, otherwise fall back to the plugin-specific default filter string.
-    let stderr_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        if cfg.level == "info" {
-            stderr_default.parse().unwrap_or_else(|_| EnvFilter::new("info"))
-        } else {
-            EnvFilter::new(&cfg.level)
-        }
-    });
+    let initial_directives = if std::env::var("RUST_LOG").is_ok() {
+        std::env::var("RUST_LOG").unwrap_or_default()
+    } else if cfg.level == "info" {
+        stderr_default.to_string()
+    } else {
+        cfg.level.clone()
+    };
+
+    let global_filter: EnvFilter = initial_directives
+        .parse()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let (reload_layer, reload_handle) =
+        tracing_subscriber::reload::Layer::new(global_filter);
 
     let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_filter(stderr_filter);
+        .with_writer(std::io::stderr);
 
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
@@ -269,9 +277,15 @@ pub fn init_logging(
         .with_filter(EnvFilter::new("debug"));
 
     tracing_subscriber::registry()
+        .with(reload_layer)
         .with(stderr_layer)
         .with(file_layer)
         .init();
 
-    guard
+    let level_handle = hc_logging::LogLevelHandle::from_reload_handle(
+        reload_handle,
+        initial_directives,
+    );
+
+    (guard, level_handle)
 }

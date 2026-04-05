@@ -8,8 +8,8 @@ use tracing::{debug, info, warn};
 
 use crate::config::TemperatureUnit;
 use crate::devices::DeviceKind;
-use crate::homecore::HomecorePublisher;
 use crate::yolink::{api::YolinkApi, types::{DeviceInfo, YolinkReport}};
+use plugin_sdk_rs::DevicePublisher;
 
 // ---------------------------------------------------------------------------
 // Device record — pairs the YoLink device info with its resolved kind
@@ -33,7 +33,7 @@ pub struct Bridge {
     /// YoLink device_id → index in `devices`, for O(1) lookup on MQTT events
     index: HashMap<String, usize>,
     yolink_api: Arc<YolinkApi>,
-    publisher: HomecorePublisher,
+    publisher: DevicePublisher,
     temp_unit: TemperatureUnit,
     poll_interval: Duration,
     /// Delay between successive per-device getState calls to avoid hub rate limits.
@@ -46,7 +46,7 @@ impl Bridge {
     pub fn new(
         raw: Vec<(DeviceInfo, DeviceKind)>,
         yolink_api: Arc<YolinkApi>,
-        publisher: HomecorePublisher,
+        publisher: DevicePublisher,
         temp_unit: TemperatureUnit,
         poll_interval_secs: u64,
         poll_device_delay_ms: u64,
@@ -202,7 +202,7 @@ impl Bridge {
                     );
                     if let Err(e) = self
                         .publisher
-                        .register_device(&hc_id, &info.name, kind.homecore_device_type(), None)
+                        .register_device_full(&hc_id, &info.name, Some(kind.homecore_device_type()), None, None)
                         .await
                     {
                         warn!(
@@ -225,7 +225,7 @@ impl Bridge {
             info!(hc_id = %hc_id, name = %info.name, "New YoLink device discovered; registering");
             if let Err(e) = self
                 .publisher
-                .register_device(&hc_id, &info.name, kind.homecore_device_type(), None)
+                .register_device_full(&hc_id, &info.name, Some(kind.homecore_device_type()), None, None)
                 .await
             {
                 warn!(hc_id = %hc_id, error = %e, "Inventory sync: register_device failed");
@@ -278,7 +278,7 @@ impl Bridge {
             }
             let hc_id = self.devices[idx].hc_id.clone();
             info!(hc_id = %hc_id, "YoLink device missing from inventory; unregistering");
-            if let Err(e) = self.publisher.unregister_device(&hc_id).await {
+            if let Err(e) = self.publisher.unregister_device(self.publisher.plugin_id(), &hc_id).await {
                 warn!(hc_id = %hc_id, error = %e, "Inventory sync: unregister_device failed");
                 self.index.insert(device_id, idx);
                 continue;

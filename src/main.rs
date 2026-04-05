@@ -2,11 +2,11 @@ mod auth;
 mod bridge;
 mod config;
 mod devices;
-mod homecore;
 mod logging;
 mod yolink;
 
 use anyhow::Result;
+use plugin_sdk_rs::{PluginClient, PluginConfig};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -33,7 +33,7 @@ async fn main() {
         .nth(1)
         .unwrap_or_else(|| "config/config.toml".to_string());
 
-    let _log_guard = init_logging(&config_path);
+    let (_log_guard, log_level_handle) = init_logging(&config_path);
 
     let cfg = match Config::load(&config_path) {
         Ok(c) => c,
@@ -45,7 +45,7 @@ async fn main() {
 
     for attempt in 1..=MAX_ATTEMPTS {
         info!(attempt, max = MAX_ATTEMPTS, "Starting hc-yolink plugin");
-        match try_start(&cfg).await {
+        match try_start(&cfg, &config_path, log_level_handle.clone()).await {
             Ok(()) => return,
             Err(e) => {
                 if attempt < MAX_ATTEMPTS {
@@ -68,7 +68,7 @@ async fn main() {
 // Logging initialisation
 // ---------------------------------------------------------------------------
 
-fn init_logging(config_path: &str) -> tracing_appender::non_blocking::WorkerGuard {
+fn init_logging(config_path: &str) -> (tracing_appender::non_blocking::WorkerGuard, hc_logging::LogLevelHandle) {
     #[derive(serde::Deserialize, Default)]
     struct Bootstrap {
         #[serde(default)]
@@ -85,7 +85,7 @@ fn init_logging(config_path: &str) -> tracing_appender::non_blocking::WorkerGuar
 // Startup — everything that can fail (retried up to MAX_ATTEMPTS times)
 // ---------------------------------------------------------------------------
 
-async fn try_start(cfg: &Config) -> Result<()> {
+async fn try_start(cfg: &Config, config_path: &str, log_level_handle: hc_logging::LogLevelHandle) -> Result<()> {
     // Resolve mode-specific endpoints from config
     let ep = Endpoints::from_config(&cfg.yolink)?;
 
@@ -125,10 +125,27 @@ async fn try_start(cfg: &Config) -> Result<()> {
     let yl_mqtt = YolinkMqtt::new(ep.mqtt_host.clone(), ep.mqtt_port, ep.client_id.clone(), tokens.clone());
     tokio::spawn(yl_mqtt.run(topic_prefix, yolink_tx));
 
-    // --- HomeCore MQTT --------------------------------------------------------
-    let hc_client = homecore::HomecoreClient::connect(&cfg.homecore).await?;
-    let publisher = hc_client.publisher();
-    let (hc_tx, hc_rx) = mpsc::channel::<(String, serde_json::Value)>(256);
+    // --- HomeCore MQTT (via SDK) ----------------------------------------------
+    let sdk_config = PluginConfig {
+        broker_host: cfg.homecore.broker_host.clone(),
+        broker_port: cfg.homecore.broker_port,
+        plugin_id:   cfg.homecore.plugin_id.clone(),
+        password:    cfg.homecore.password.clone(),
+    };
+
+    let client = PluginClient::connect(sdk_config).await?;
+    let publisher = client.device_publisher();
+    let (cmd_tx, cmd_rx) = mpsc::channel::<(String, serde_json::Value)>(256);
+
+    // Enable management protocol (heartbeat + remote config/log commands).
+    let mgmt = client
+        .enable_management(
+            60,
+            Some(env!("CARGO_PKG_VERSION").to_string()),
+            Some(config_path.to_string()),
+            Some(log_level_handle),
+        )
+        .await?;
 
     // --- Device discovery -----------------------------------------------------
     let raw_devices = yolink_api.get_device_list().await?;
@@ -152,30 +169,16 @@ async fn try_start(cfg: &Config) -> Result<()> {
         let hc_type = kind.homecore_device_type();
 
         // Register with HomeCore
-        publisher
-            .register_device(&hc_id, &info.name, hc_type, None)
+        client
+            .register_device_typed(&hc_id, &info.name, hc_type, None)
             .await?;
 
         // Subscribe to commands for this device
-        publisher.subscribe_commands(&hc_id).await?;
+        client.subscribe_commands(&hc_id).await?;
 
         // DISABLED: Initial getState calls overwhelm the YoLink SpeakerHub,
         // causing it to drop the MQTT connection.  Devices will get state from
         // the first periodic poll or from real-time MQTT reports.
-        //
-        // match yolink_api.get_device_state(&info).await {
-        //     Ok(data) => {
-        //         let online = data["online"].as_bool().unwrap_or(true);
-        //         publisher.publish_availability(&hc_id, online).await?;
-        //         if let Some(state) = kind.translate_state(&data, &cfg.yolink.temperature_unit) {
-        //             publisher.publish_state(&hc_id, &state).await?;
-        //         }
-        //     }
-        //     Err(e) => {
-        //         tracing::warn!(device_id = %hc_id, error = %e, "Could not fetch initial state; marking offline");
-        //         publisher.publish_availability(&hc_id, false).await?;
-        //     }
-        // }
         publisher.publish_availability(&hc_id, true).await?;
 
         bridged_devices.push((info, kind));
@@ -186,8 +189,21 @@ async fn try_start(cfg: &Config) -> Result<()> {
         "All devices registered with HomeCore"
     );
 
-    // --- Start HomeCore event loop (spawned so bridge can run on current task) --
-    tokio::spawn(hc_client.run(hc_tx));
+    // --- Start SDK event loop (spawned so bridge can run on current task) -----
+    let cmd_tx_clone = cmd_tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = client
+            .run_managed(
+                move |device_id, payload| {
+                    let _ = cmd_tx_clone.try_send((device_id, payload));
+                },
+                mgmt,
+            )
+            .await
+        {
+            error!(error = %e, "SDK event loop exited with error");
+        }
+    });
 
     // --- Bridge event loop (runs until error / shutdown) ----------------------
     let bridge = bridge::Bridge::new(
@@ -200,5 +216,5 @@ async fn try_start(cfg: &Config) -> Result<()> {
         cfg.yolink.initial_fetch_delay_secs,
     );
 
-    bridge.run(yolink_rx, hc_rx).await
+    bridge.run(yolink_rx, cmd_rx).await
 }
