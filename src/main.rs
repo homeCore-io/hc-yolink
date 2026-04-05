@@ -197,6 +197,7 @@ async fn try_start(cfg: &Config) -> Result<()> {
         cfg.yolink.temperature_unit.clone(),
         cfg.yolink.poll_interval_secs,
         cfg.yolink.poll_device_delay_ms,
+        cfg.yolink.initial_fetch_delay_secs,
     );
 
     bridge.run(yolink_rx, hc_rx).await

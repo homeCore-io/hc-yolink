@@ -38,6 +38,8 @@ pub struct Bridge {
     poll_interval: Duration,
     /// Delay between successive per-device getState calls to avoid hub rate limits.
     poll_device_delay: Duration,
+    /// Delay before the one-shot background initial state fetch. Zero = disabled.
+    initial_fetch_delay: Duration,
 }
 
 impl Bridge {
@@ -48,6 +50,7 @@ impl Bridge {
         temp_unit: TemperatureUnit,
         poll_interval_secs: u64,
         poll_device_delay_ms: u64,
+        initial_fetch_delay_secs: u64,
     ) -> Self {
         let mut devices = Vec::with_capacity(raw.len());
         let mut index = HashMap::new();
@@ -71,6 +74,7 @@ impl Bridge {
             temp_unit,
             poll_interval: Duration::from_secs(poll_interval_secs),
             poll_device_delay: Duration::from_millis(poll_device_delay_ms),
+            initial_fetch_delay: Duration::from_secs(initial_fetch_delay_secs),
         }
     }
 
@@ -83,13 +87,57 @@ impl Bridge {
         mut yolink_rx: mpsc::Receiver<YolinkReport>,
         mut homecore_rx: mpsc::Receiver<(String, Value)>,
     ) -> Result<()> {
-        // Skip initial poll — main.rs already fetched getState for every device
-        // during registration.  Polling again would double the startup API load
-        // and can overwhelm the local hub.
+        // The initial getState sweep runs as a background task below.
+        // Skip the first poll tick so we don't double-fetch at startup.
         let mut poll_timer = tokio::time::interval(self.poll_interval);
-        // Consume the immediate first tick so the first real poll fires after
-        // one full interval.
         poll_timer.tick().await;
+
+        // --- Background initial state fetch ----------------------------------
+        if !self.initial_fetch_delay.is_zero() {
+            let devices: Vec<Device> = self.devices.clone();
+            let api = Arc::clone(&self.yolink_api);
+            let publisher = self.publisher.clone();
+            let temp_unit = self.temp_unit.clone();
+            let device_delay = self.poll_device_delay;
+            let startup_delay = self.initial_fetch_delay;
+
+            tokio::spawn(async move {
+                info!(
+                    delay_secs = startup_delay.as_secs(),
+                    "Initial state fetch: waiting before starting"
+                );
+                tokio::time::sleep(startup_delay).await;
+                info!(count = devices.len(), "Initial state fetch: starting");
+
+                for dev in &devices {
+                    if dev.retired || !dev.kind.is_supported() {
+                        continue;
+                    }
+
+                    if !device_delay.is_zero() {
+                        tokio::time::sleep(device_delay).await;
+                    }
+
+                    match api.get_device_state(&dev.info).await {
+                        Ok(data) => {
+                            let online = data["online"].as_bool().unwrap_or(true);
+                            let _ = publisher.publish_availability(&dev.hc_id, online).await;
+                            if let Some(state) = dev.kind.translate_state(&data, &temp_unit) {
+                                if let Err(e) = publisher.publish_state(&dev.hc_id, &state).await {
+                                    warn!(hc_id = %dev.hc_id, error = %e,
+                                        "Initial fetch: failed to publish state");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(hc_id = %dev.hc_id, error = %e,
+                                "Initial fetch: getState failed");
+                        }
+                    }
+                }
+                info!("Initial state fetch complete");
+            });
+        }
 
         info!("Bridge event loop running ({} devices)", self.devices.len());
 

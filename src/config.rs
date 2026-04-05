@@ -120,6 +120,12 @@ pub struct YolinkConfig {
     #[serde(default = "default_poll_device_delay_ms")]
     pub poll_device_delay_ms: u64,
 
+    /// Delay before starting the initial background state fetch (seconds).
+    /// Gives the YoLink MQTT connection time to stabilize before adding HTTP
+    /// load to the hub.  Set to 0 to disable (rely on MQTT reports + periodic poll).
+    #[serde(default = "default_initial_fetch_delay_secs")]
+    pub initial_fetch_delay_secs: u64,
+
     /// Unit used when publishing temperature values to HomeCore.
     #[serde(default)]
     pub temperature_unit: TemperatureUnit,
@@ -128,8 +134,9 @@ pub struct YolinkConfig {
     pub local: Option<LocalConfig>,
 }
 
-fn default_poll_interval() -> u64 { 300 }
+fn default_poll_interval() -> u64 { 3600 }
 fn default_poll_device_delay_ms() -> u64 { 1000 }
+fn default_initial_fetch_delay_secs() -> u64 { 10 }
 
 // ---------------------------------------------------------------------------
 // Cloud mode (YS1603 / YS1605)
