@@ -10,7 +10,7 @@ use plugin_sdk_rs::{PluginClient, PluginConfig};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use config::{Config, Endpoints};
 use devices::DeviceKind;
@@ -147,6 +147,27 @@ async fn try_start(cfg: &Config, config_path: &str, log_level_handle: hc_logging
         )
         .await?;
 
+    // Start the SDK event loop FIRST so the MQTT eventloop is pumping while
+    // we register devices.  Without this, queued publishes block forever once
+    // the rumqttc internal buffer (64) fills up.
+    let cmd_tx_clone = cmd_tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = client
+            .run_managed(
+                move |device_id, payload| {
+                    let _ = cmd_tx_clone.try_send((device_id, payload));
+                },
+                mgmt,
+            )
+            .await
+        {
+            error!(error = %e, "SDK event loop exited with error");
+        }
+    });
+
+    // Brief yield to let the eventloop connect before we start publishing.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
     // --- Device discovery -----------------------------------------------------
     let raw_devices = yolink_api.get_device_list().await?;
     info!(count = raw_devices.len(), "Discovered YoLink devices");
@@ -168,17 +189,14 @@ async fn try_start(cfg: &Config, config_path: &str, log_level_handle: hc_logging
         let hc_id = format!("yolink_{}", info.device_id);
         let hc_type = kind.homecore_device_type();
 
-        // Register with HomeCore
-        client
-            .register_device_typed(&hc_id, &info.name, hc_type, None)
-            .await?;
+        // Register with HomeCore via DevicePublisher (PluginClient is consumed)
+        if let Err(e) = publisher
+            .register_device_full(&hc_id, &info.name, Some(hc_type), None, None)
+            .await
+        {
+            warn!(hc_id, error = %e, "Failed to register device");
+        }
 
-        // Subscribe to commands for this device
-        client.subscribe_commands(&hc_id).await?;
-
-        // DISABLED: Initial getState calls overwhelm the YoLink SpeakerHub,
-        // causing it to drop the MQTT connection.  Devices will get state from
-        // the first periodic poll or from real-time MQTT reports.
         publisher.publish_availability(&hc_id, true).await?;
 
         bridged_devices.push((info, kind));
@@ -188,22 +206,6 @@ async fn try_start(cfg: &Config, config_path: &str, log_level_handle: hc_logging
         registered = bridged_devices.len(),
         "All devices registered with HomeCore"
     );
-
-    // --- Start SDK event loop (spawned so bridge can run on current task) -----
-    let cmd_tx_clone = cmd_tx.clone();
-    tokio::spawn(async move {
-        if let Err(e) = client
-            .run_managed(
-                move |device_id, payload| {
-                    let _ = cmd_tx_clone.try_send((device_id, payload));
-                },
-                mgmt,
-            )
-            .await
-        {
-            error!(error = %e, "SDK event loop exited with error");
-        }
-    });
 
     // --- Bridge event loop (runs until error / shutdown) ----------------------
     let bridge = bridge::Bridge::new(
