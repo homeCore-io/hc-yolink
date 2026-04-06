@@ -196,6 +196,9 @@ async fn try_start(cfg: &Config, config_path: &str, log_level_handle: hc_logging
         {
             warn!(hc_id, error = %e, "Failed to register device");
         }
+        if let Err(e) = publisher.subscribe_commands(&hc_id).await {
+            warn!(hc_id, error = %e, "Failed to subscribe commands");
+        }
 
         publisher.publish_availability(&hc_id, true).await?;
 
