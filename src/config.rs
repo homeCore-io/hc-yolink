@@ -9,6 +9,8 @@ use serde::Deserialize;
 pub struct Config {
     pub homecore: HomecoreConfig,
     pub yolink: YolinkConfig,
+    #[serde(default)]
+    pub logging: crate::logging::LoggingConfig,
 }
 
 impl Config {

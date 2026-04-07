@@ -33,7 +33,7 @@ async fn main() {
         .nth(1)
         .unwrap_or_else(|| "config/config.toml".to_string());
 
-    let (_log_guard, log_level_handle) = init_logging(&config_path);
+    let (_log_guard, log_level_handle, mqtt_log_handle) = init_logging(&config_path);
 
     let cfg = match Config::load(&config_path) {
         Ok(c) => c,
@@ -45,7 +45,7 @@ async fn main() {
 
     for attempt in 1..=MAX_ATTEMPTS {
         info!(attempt, max = MAX_ATTEMPTS, "Starting hc-yolink plugin");
-        match try_start(&cfg, &config_path, log_level_handle.clone()).await {
+        match try_start(&cfg, &config_path, log_level_handle.clone(), mqtt_log_handle.clone()).await {
             Ok(()) => return,
             Err(e) => {
                 if attempt < MAX_ATTEMPTS {
@@ -68,7 +68,7 @@ async fn main() {
 // Logging initialisation
 // ---------------------------------------------------------------------------
 
-fn init_logging(config_path: &str) -> (tracing_appender::non_blocking::WorkerGuard, hc_logging::LogLevelHandle) {
+fn init_logging(config_path: &str) -> (tracing_appender::non_blocking::WorkerGuard, hc_logging::LogLevelHandle, plugin_sdk_rs::mqtt_log_layer::MqttLogHandle) {
     #[derive(serde::Deserialize, Default)]
     struct Bootstrap {
         #[serde(default)]
@@ -85,7 +85,7 @@ fn init_logging(config_path: &str) -> (tracing_appender::non_blocking::WorkerGua
 // Startup — everything that can fail (retried up to MAX_ATTEMPTS times)
 // ---------------------------------------------------------------------------
 
-async fn try_start(cfg: &Config, config_path: &str, log_level_handle: hc_logging::LogLevelHandle) -> Result<()> {
+async fn try_start(cfg: &Config, config_path: &str, log_level_handle: hc_logging::LogLevelHandle, mqtt_log_handle: plugin_sdk_rs::mqtt_log_layer::MqttLogHandle) -> Result<()> {
     // Resolve mode-specific endpoints from config
     let ep = Endpoints::from_config(&cfg.yolink)?;
 
@@ -134,6 +134,11 @@ async fn try_start(cfg: &Config, config_path: &str, log_level_handle: hc_logging
     };
 
     let client = PluginClient::connect(sdk_config).await?;
+    mqtt_log_handle.connect(
+        client.mqtt_client(),
+        &cfg.homecore.plugin_id,
+        &cfg.logging.log_forward_level,
+    );
     let publisher = client.device_publisher();
     let (cmd_tx, cmd_rx) = mpsc::channel::<(String, serde_json::Value)>(256);
 
