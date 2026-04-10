@@ -42,20 +42,20 @@ pub enum DeviceKind {
 impl DeviceKind {
     pub fn from_yolink_type(s: &str) -> Self {
         match s {
-            "Outlet"          => Self::Outlet,
-            "SmartPlug"       => Self::SmartPlug,
-            "Switch"          => Self::Switch,
-            "MultiOutlet"     => Self::MultiOutlet,
-            "DoorSensor"      => Self::DoorSensor,
-            "MotionSensor"    => Self::MotionSensor,
-            "LeakSensor"      => Self::LeakSensor,
-            "THSensor"        => Self::THSensor,
+            "Outlet" => Self::Outlet,
+            "SmartPlug" => Self::SmartPlug,
+            "Switch" => Self::Switch,
+            "MultiOutlet" => Self::MultiOutlet,
+            "DoorSensor" => Self::DoorSensor,
+            "MotionSensor" => Self::MotionSensor,
+            "LeakSensor" => Self::LeakSensor,
+            "THSensor" => Self::THSensor,
             "VibrationSensor" => Self::VibrationSensor,
-            "Lock"            => Self::Lock,
-            "LockV2"          => Self::LockV2,
-            "Siren"           => Self::Siren,
-            "Hub"             => Self::Hub,
-            other             => Self::Unknown(other.to_string()),
+            "Lock" => Self::Lock,
+            "LockV2" => Self::LockV2,
+            "Siren" => Self::Siren,
+            "Hub" => Self::Hub,
+            other => Self::Unknown(other.to_string()),
         }
     }
 
@@ -116,13 +116,19 @@ impl DeviceKind {
                     .as_bool()
                     .ok_or_else(|| anyhow::anyhow!("cmd missing boolean 'on' field"))?;
                 // YoLink uses "open" for on and "close" for off
-                Ok(("setState", serde_json::json!({ "state": if on { "open" } else { "close" } })))
+                Ok((
+                    "setState",
+                    serde_json::json!({ "state": if on { "open" } else { "close" } }),
+                ))
             }
             Self::Siren => {
                 let on = cmd["on"]
                     .as_bool()
                     .ok_or_else(|| anyhow::anyhow!("cmd missing boolean 'on' field"))?;
-                Ok(("setState", serde_json::json!({ "state": if on { "open" } else { "close" } })))
+                Ok((
+                    "setState",
+                    serde_json::json!({ "state": if on { "open" } else { "close" } }),
+                ))
             }
             Self::Lock | Self::LockV2 => {
                 let locked = cmd["locked"]
@@ -355,7 +361,9 @@ mod tests {
     #[test]
     fn outlet_on() {
         let data = json!({ "state": "open", "power": 12.5, "electricity": 0.031 });
-        let state = DeviceKind::Outlet.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::Outlet
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["on"], json!(true));
         assert_eq!(state["power_w"], json!(12.5));
         assert_eq!(state["energy_kwh"], json!(0.031));
@@ -364,14 +372,18 @@ mod tests {
     #[test]
     fn outlet_off() {
         let data = json!({ "state": "close" });
-        let state = DeviceKind::Outlet.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::Outlet
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["on"], json!(false));
     }
 
     #[test]
     fn door_open() {
         let data = json!({ "state": "open", "battery": 3 });
-        let state = DeviceKind::DoorSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::DoorSensor
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["open"], json!(true));
         assert_eq!(state["contact"], json!(true));
         assert_eq!(state["battery"], json!(75)); // 3/4 = 75%
@@ -381,7 +393,9 @@ mod tests {
     fn door_open_nested_getstate() {
         // getState response: data["state"] is a nested object
         let data = json!({ "state": { "state": "open", "battery": 4 }, "online": true });
-        let state = DeviceKind::DoorSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::DoorSensor
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["open"], json!(true));
         assert_eq!(state["contact"], json!(true));
         assert_eq!(state["battery"], json!(100));
@@ -390,7 +404,9 @@ mod tests {
     #[test]
     fn door_closed() {
         let data = json!({ "state": "close", "battery": 4 });
-        let state = DeviceKind::DoorSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::DoorSensor
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["open"], json!(false));
         assert_eq!(state["contact"], json!(false));
     }
@@ -398,14 +414,18 @@ mod tests {
     #[test]
     fn motion_detected() {
         let data = json!({ "alarm": true, "battery": 2 });
-        let state = DeviceKind::MotionSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::MotionSensor
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["motion"], json!(true));
     }
 
     #[test]
     fn leak_sensor_sets_canonical_and_legacy_keys() {
         let data = json!({ "alarm": true, "battery": 2 });
-        let state = DeviceKind::LeakSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::LeakSensor
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["leak"], json!(true));
         assert_eq!(state["water_detected"], json!(true));
     }
@@ -413,7 +433,9 @@ mod tests {
     #[test]
     fn th_celsius_device_to_fahrenheit_output() {
         let data = json!({ "temperature": 22.5, "humidity": 65.2, "tempUnit": "℃", "battery": 4 });
-        let state = DeviceKind::THSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::THSensor
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         // 22.5 °C → 72.5 °F
         assert_eq!(state["temperature"], json!(72.5));
         assert_eq!(state["temperature_unit"], json!("F"));
@@ -423,7 +445,9 @@ mod tests {
     #[test]
     fn th_celsius_device_to_celsius_output() {
         let data = json!({ "temperature": 22.5, "humidity": 65.2, "tempUnit": "℃", "battery": 4 });
-        let state = DeviceKind::THSensor.translate_state(&data, &TemperatureUnit::C).unwrap();
+        let state = DeviceKind::THSensor
+            .translate_state(&data, &TemperatureUnit::C)
+            .unwrap();
         assert_eq!(state["temperature"], json!(22.5));
         assert_eq!(state["temperature_unit"], json!("C"));
     }
@@ -431,14 +455,18 @@ mod tests {
     #[test]
     fn th_fahrenheit_device_to_fahrenheit_output() {
         let data = json!({ "temperature": 72.5, "humidity": 50.0, "tempUnit": "℉" });
-        let state = DeviceKind::THSensor.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::THSensor
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["temperature"], json!(72.5));
     }
 
     #[test]
     fn th_fahrenheit_device_to_celsius_output() {
         let data = json!({ "temperature": 72.5, "humidity": 50.0, "tempUnit": "℉" });
-        let state = DeviceKind::THSensor.translate_state(&data, &TemperatureUnit::C).unwrap();
+        let state = DeviceKind::THSensor
+            .translate_state(&data, &TemperatureUnit::C)
+            .unwrap();
         // 72.5 °F → 22.5 °C
         assert_eq!(state["temperature"], json!(22.5));
     }
@@ -452,7 +480,9 @@ mod tests {
             "alert": { "source": "Fingerprint", "type": "UnLockFailed" },
             "attributes": { "autoLock": 10, "soundLevel": 2 }
         });
-        let state = DeviceKind::LockV2.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::LockV2
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["locked"], json!(false));
         assert_eq!(state["door_open"], json!(true));
         assert_eq!(state["battery"], json!(100)); // 4 * 25 = 100%
@@ -467,7 +497,9 @@ mod tests {
             "state": { "lock": "locked", "door": "closed" },
             "battery": 3
         });
-        let state = DeviceKind::LockV2.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::LockV2
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["locked"], json!(true));
         assert_eq!(state["door_open"], json!(false));
         assert_eq!(state["battery"], json!(75)); // 3 * 25 = 75%
@@ -477,7 +509,9 @@ mod tests {
     fn lock_flat_string_state() {
         // Legacy Lock flat format: data["state"] is a string
         let data = json!({ "state": "locked", "battery": 3 });
-        let state = DeviceKind::Lock.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::Lock
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["locked"], json!(true));
         assert_eq!(state["battery"], json!(75));
     }
@@ -485,7 +519,9 @@ mod tests {
     #[test]
     fn lock_battery_zero_pct() {
         let data = json!({ "state": { "lock": "locked", "door": "closed" }, "battery": 0 });
-        let state = DeviceKind::LockV2.translate_state(&data, &TemperatureUnit::F).unwrap();
+        let state = DeviceKind::LockV2
+            .translate_state(&data, &TemperatureUnit::F)
+            .unwrap();
         assert_eq!(state["battery"], json!(0));
     }
 

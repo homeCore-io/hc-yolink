@@ -8,7 +8,10 @@ use tracing::{debug, info, warn};
 
 use crate::config::TemperatureUnit;
 use crate::devices::DeviceKind;
-use crate::yolink::{api::YolinkApi, types::{DeviceInfo, YolinkReport}};
+use crate::yolink::{
+    api::YolinkApi,
+    types::{DeviceInfo, YolinkReport},
+};
 use plugin_sdk_rs::DevicePublisher;
 
 // ---------------------------------------------------------------------------
@@ -202,7 +205,13 @@ impl Bridge {
                     );
                     if let Err(e) = self
                         .publisher
-                        .register_device_full(&hc_id, &info.name, Some(kind.homecore_device_type()), None, None)
+                        .register_device_full(
+                            &hc_id,
+                            &info.name,
+                            Some(kind.homecore_device_type()),
+                            None,
+                            None,
+                        )
                         .await
                     {
                         warn!(
@@ -225,7 +234,13 @@ impl Bridge {
             info!(hc_id = %hc_id, name = %info.name, "New YoLink device discovered; registering");
             if let Err(e) = self
                 .publisher
-                .register_device_full(&hc_id, &info.name, Some(kind.homecore_device_type()), None, None)
+                .register_device_full(
+                    &hc_id,
+                    &info.name,
+                    Some(kind.homecore_device_type()),
+                    None,
+                    None,
+                )
                 .await
             {
                 warn!(hc_id = %hc_id, error = %e, "Inventory sync: register_device failed");
@@ -278,7 +293,11 @@ impl Bridge {
             }
             let hc_id = self.devices[idx].hc_id.clone();
             info!(hc_id = %hc_id, "YoLink device missing from inventory; unregistering");
-            if let Err(e) = self.publisher.unregister_device(self.publisher.plugin_id(), &hc_id).await {
+            if let Err(e) = self
+                .publisher
+                .unregister_device(self.publisher.plugin_id(), &hc_id)
+                .await
+            {
                 warn!(hc_id = %hc_id, error = %e, "Inventory sync: unregister_device failed");
                 self.index.insert(device_id, idx);
                 continue;
@@ -315,7 +334,11 @@ impl Bridge {
                 online,
                 "Publishing availability from YoLink report"
             );
-            if let Err(e) = self.publisher.publish_availability(&dev.hc_id, online).await {
+            if let Err(e) = self
+                .publisher
+                .publish_availability(&dev.hc_id, online)
+                .await
+            {
                 warn!(hc_id = %dev.hc_id, error = %e, "Failed to publish availability");
             }
         }
@@ -330,7 +353,11 @@ impl Bridge {
                 patch = %patch,
                 "Publishing state patch from YoLink report"
             );
-            if let Err(e) = self.publisher.publish_state_partial(&dev.hc_id, &patch).await {
+            if let Err(e) = self
+                .publisher
+                .publish_state_partial(&dev.hc_id, &patch)
+                .await
+            {
                 warn!(hc_id = %dev.hc_id, error = %e, "Failed to publish state partial");
             }
         } else {
@@ -417,7 +444,10 @@ impl Bridge {
                         online,
                         "Publishing availability from YoLink getState snapshot"
                     );
-                    let _ = self.publisher.publish_availability(&dev.hc_id, online).await;
+                    let _ = self
+                        .publisher
+                        .publish_availability(&dev.hc_id, online)
+                        .await;
 
                     // Publish full state (retained — this is a ground-truth refresh)
                     if let Some(state) = dev.kind.translate_state(&data, &self.temp_unit) {

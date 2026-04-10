@@ -45,7 +45,14 @@ async fn main() {
 
     for attempt in 1..=MAX_ATTEMPTS {
         info!(attempt, max = MAX_ATTEMPTS, "Starting hc-yolink plugin");
-        match try_start(&cfg, &config_path, log_level_handle.clone(), mqtt_log_handle.clone()).await {
+        match try_start(
+            &cfg,
+            &config_path,
+            log_level_handle.clone(),
+            mqtt_log_handle.clone(),
+        )
+        .await
+        {
             Ok(()) => return,
             Err(e) => {
                 if attempt < MAX_ATTEMPTS {
@@ -68,7 +75,13 @@ async fn main() {
 // Logging initialisation
 // ---------------------------------------------------------------------------
 
-fn init_logging(config_path: &str) -> (tracing_appender::non_blocking::WorkerGuard, hc_logging::LogLevelHandle, plugin_sdk_rs::mqtt_log_layer::MqttLogHandle) {
+fn init_logging(
+    config_path: &str,
+) -> (
+    tracing_appender::non_blocking::WorkerGuard,
+    hc_logging::LogLevelHandle,
+    plugin_sdk_rs::mqtt_log_layer::MqttLogHandle,
+) {
     #[derive(serde::Deserialize, Default)]
     struct Bootstrap {
         #[serde(default)]
@@ -78,14 +91,24 @@ fn init_logging(config_path: &str) -> (tracing_appender::non_blocking::WorkerGua
         .ok()
         .and_then(|s| toml::from_str(&s).ok())
         .unwrap_or_default();
-    logging::init_logging(config_path, "hc-yolink", "hc_yolink=info", &bootstrap.logging)
+    logging::init_logging(
+        config_path,
+        "hc-yolink",
+        "hc_yolink=info",
+        &bootstrap.logging,
+    )
 }
 
 // ---------------------------------------------------------------------------
 // Startup — everything that can fail (retried up to MAX_ATTEMPTS times)
 // ---------------------------------------------------------------------------
 
-async fn try_start(cfg: &Config, config_path: &str, log_level_handle: hc_logging::LogLevelHandle, mqtt_log_handle: plugin_sdk_rs::mqtt_log_layer::MqttLogHandle) -> Result<()> {
+async fn try_start(
+    cfg: &Config,
+    config_path: &str,
+    log_level_handle: hc_logging::LogLevelHandle,
+    mqtt_log_handle: plugin_sdk_rs::mqtt_log_layer::MqttLogHandle,
+) -> Result<()> {
     // Resolve mode-specific endpoints from config
     let ep = Endpoints::from_config(&cfg.yolink)?;
 
@@ -122,15 +145,20 @@ async fn try_start(cfg: &Config, config_path: &str, log_level_handle: hc_logging
 
     // --- YoLink MQTT event stream ---------------------------------------------
     let (yolink_tx, yolink_rx) = mpsc::channel::<YolinkReport>(256);
-    let yl_mqtt = YolinkMqtt::new(ep.mqtt_host.clone(), ep.mqtt_port, ep.client_id.clone(), tokens.clone());
+    let yl_mqtt = YolinkMqtt::new(
+        ep.mqtt_host.clone(),
+        ep.mqtt_port,
+        ep.client_id.clone(),
+        tokens.clone(),
+    );
     tokio::spawn(yl_mqtt.run(topic_prefix, yolink_tx));
 
     // --- HomeCore MQTT (via SDK) ----------------------------------------------
     let sdk_config = PluginConfig {
         broker_host: cfg.homecore.broker_host.clone(),
         broker_port: cfg.homecore.broker_port,
-        plugin_id:   cfg.homecore.plugin_id.clone(),
-        password:    cfg.homecore.password.clone(),
+        plugin_id: cfg.homecore.plugin_id.clone(),
+        password: cfg.homecore.password.clone(),
     };
 
     let client = PluginClient::connect(sdk_config).await?;

@@ -98,15 +98,21 @@ impl YolinkApi {
     /// The method is `{DeviceType}.getState`, e.g. "Outlet.getState".
     pub async fn get_device_state(&self, info: &DeviceInfo) -> Result<Value> {
         let method = format!("{}.getState", info.device_type);
-        self.call(&method, Some(&info.device_id), Some(&info.token), None).await
+        self.call(&method, Some(&info.device_id), Some(&info.token), None)
+            .await
     }
 
     /// Send a state-change command to a device.
     /// The method is `{DeviceType}.setState`, e.g. "Outlet.setState".
     pub async fn set_device_state(&self, info: &DeviceInfo, params: Value) -> Result<()> {
         let method = format!("{}.setState", info.device_type);
-        self.call(&method, Some(&info.device_id), Some(&info.token), Some(params))
-            .await?;
+        self.call(
+            &method,
+            Some(&info.device_id),
+            Some(&info.token),
+            Some(params),
+        )
+        .await?;
         Ok(())
     }
 
@@ -119,7 +125,8 @@ impl YolinkApi {
         params: Option<Value>,
     ) -> Result<Value> {
         let method = format!("{}.{}", info.device_type, method_suffix);
-        self.call(&method, Some(&info.device_id), Some(&info.token), params).await
+        self.call(&method, Some(&info.device_id), Some(&info.token), params)
+            .await
     }
 }
 

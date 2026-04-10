@@ -66,8 +66,6 @@ impl TokenManager {
         self.fetch_and_store().await
     }
 
-
-
     async fn fetch_and_store(&self) -> Result<String> {
         debug!(url = %self.token_url, "Fetching YoLink access token");
 
@@ -75,8 +73,8 @@ impl TokenManager {
             .http
             .post(&self.token_url)
             .form(&[
-                ("grant_type",    "client_credentials"),
-                ("client_id",     &self.client_id),
+                ("grant_type", "client_credentials"),
+                ("client_id", &self.client_id),
                 ("client_secret", &self.client_secret),
             ])
             .send()

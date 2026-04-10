@@ -52,9 +52,15 @@ pub struct HomecoreConfig {
     pub password: String,
 }
 
-fn default_broker_host() -> String { "127.0.0.1".into() }
-fn default_broker_port() -> u16    { 1883 }
-fn default_plugin_id()   -> String { "plugin.yolink".into() }
+fn default_broker_host() -> String {
+    "127.0.0.1".into()
+}
+fn default_broker_port() -> u16 {
+    1883
+}
+fn default_plugin_id() -> String {
+    "plugin.yolink".into()
+}
 
 // ---------------------------------------------------------------------------
 // YoLink settings
@@ -136,9 +142,15 @@ pub struct YolinkConfig {
     pub local: Option<LocalConfig>,
 }
 
-fn default_poll_interval() -> u64 { 3600 }
-fn default_poll_device_delay_ms() -> u64 { 1000 }
-fn default_initial_fetch_delay_secs() -> u64 { 10 }
+fn default_poll_interval() -> u64 {
+    3600
+}
+fn default_poll_device_delay_ms() -> u64 {
+    1000
+}
+fn default_initial_fetch_delay_secs() -> u64 {
+    10
+}
 
 // ---------------------------------------------------------------------------
 // Cloud mode (YS1603 / YS1605)
@@ -159,9 +171,15 @@ pub struct CloudConfig {
     pub mqtt_port: u16,
 }
 
-fn default_cloud_api_url()  -> String { "https://api.yosmart.com".into() }
-fn default_cloud_mqtt_host() -> String { "mqtt.api.yosmart.com".into() }
-fn default_cloud_mqtt_port() -> u16   { 8003 }
+fn default_cloud_api_url() -> String {
+    "https://api.yosmart.com".into()
+}
+fn default_cloud_mqtt_host() -> String {
+    "mqtt.api.yosmart.com".into()
+}
+fn default_cloud_mqtt_port() -> u16 {
+    8003
+}
 
 // ---------------------------------------------------------------------------
 // Local mode (YS1606 Local Hub only)
@@ -188,8 +206,12 @@ pub struct LocalConfig {
     pub mqtt_port: u16,
 }
 
-fn default_local_api_port()  -> u16 { 1080 }
-fn default_local_mqtt_port() -> u16 { 18080 }
+fn default_local_api_port() -> u16 {
+    1080
+}
+fn default_local_mqtt_port() -> u16 {
+    18080
+}
 
 // ---------------------------------------------------------------------------
 // Resolved endpoint bundle (computed once in main, passed around)
@@ -214,26 +236,26 @@ impl Endpoints {
             Mode::Cloud => {
                 let c = cfg.cloud.as_ref().unwrap();
                 Ok(Self {
-                    token_url:      format!("{}/open/yolink/token", c.api_url),
-                    api_base_url:   c.api_url.clone(),
-                    mqtt_host:      c.mqtt_host.clone(),
-                    mqtt_port:      c.mqtt_port,
-                    client_id:      c.uaid.clone(),
-                    client_secret:  c.secret_key.clone(),
-                    net_id:         String::new(),
+                    token_url: format!("{}/open/yolink/token", c.api_url),
+                    api_base_url: c.api_url.clone(),
+                    mqtt_host: c.mqtt_host.clone(),
+                    mqtt_port: c.mqtt_port,
+                    client_id: c.uaid.clone(),
+                    client_secret: c.secret_key.clone(),
+                    net_id: String::new(),
                 })
             }
             Mode::Local => {
                 let l = cfg.local.as_ref().unwrap();
                 let base = format!("http://{}:{}", l.hub_ip, l.api_port);
                 Ok(Self {
-                    token_url:      format!("{}/open/yolink/token", base),
-                    api_base_url:   base,
-                    mqtt_host:      l.hub_ip.clone(),
-                    mqtt_port:      l.mqtt_port,
-                    client_id:      l.client_id.clone(),
-                    client_secret:  l.client_secret.clone(),
-                    net_id:         l.net_id.clone(),
+                    token_url: format!("{}/open/yolink/token", base),
+                    api_base_url: base,
+                    mqtt_host: l.hub_ip.clone(),
+                    mqtt_port: l.mqtt_port,
+                    client_id: l.client_id.clone(),
+                    client_secret: l.client_secret.clone(),
+                    net_id: l.net_id.clone(),
                 })
             }
         }

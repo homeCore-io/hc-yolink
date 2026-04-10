@@ -25,7 +25,12 @@ impl YolinkMqtt {
         yolink_client_id: String,
         tokens: Arc<TokenManager>,
     ) -> Self {
-        Self { host, port, yolink_client_id, tokens }
+        Self {
+            host,
+            port,
+            yolink_client_id,
+            tokens,
+        }
     }
 
     /// Drive the MQTT event loop forever, reconnecting on error.
@@ -61,11 +66,7 @@ impl YolinkMqtt {
         }
     }
 
-    async fn run_once(
-        &self,
-        topic_prefix: &str,
-        tx: &mpsc::Sender<YolinkReport>,
-    ) -> Result<()> {
+    async fn run_once(&self, topic_prefix: &str, tx: &mpsc::Sender<YolinkReport>) -> Result<()> {
         let token = self.tokens.get_token().await?;
         // Local hub (and cloud): username = YoLink Client ID, password = access token
         let session_id = format!("hc-yolink-{}", &Uuid::new_v4().to_string()[..8]);
@@ -80,9 +81,7 @@ impl YolinkMqtt {
         // Cloud:  yl-home/{home_id}/+/report
         // Local:  ylsubnet/{net_id}/+/report
         let topic = format!("{topic_prefix}/+/report");
-        client
-            .subscribe(&topic, QoS::AtLeastOnce)
-            .await?;
+        client.subscribe(&topic, QoS::AtLeastOnce).await?;
 
         info!(
             host = %self.host,
@@ -107,12 +106,13 @@ impl YolinkMqtt {
 
                     match serde_json::from_slice::<Value>(&p.payload) {
                         Ok(payload) => {
-                            let event = payload["event"]
-                                .as_str()
-                                .unwrap_or("Report")
-                                .to_string();
+                            let event = payload["event"].as_str().unwrap_or("Report").to_string();
                             let data = payload["data"].clone();
-                            let report = YolinkReport { device_id, event, data };
+                            let report = YolinkReport {
+                                device_id,
+                                event,
+                                data,
+                            };
                             if tx.send(report).await.is_err() {
                                 // Receiver dropped — plugin is shutting down
                                 return Ok(());
