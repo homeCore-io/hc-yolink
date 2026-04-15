@@ -9,7 +9,7 @@ use anyhow::Result;
 use plugin_sdk_rs::{PluginClient, PluginConfig};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tracing::{error, info, warn};
 
 use config::{Config, Endpoints};
@@ -170,7 +170,14 @@ async fn try_start(
     let publisher = client.device_publisher();
     let (cmd_tx, cmd_rx) = mpsc::channel::<(String, serde_json::Value)>(256);
 
-    // Enable management protocol (heartbeat + remote config/log commands).
+    // Rescan trigger — shared between the management command handler and the
+    // bridge.  Notified when the user clicks "Rescan devices" in the admin UI
+    // (via the `rescan_devices` management command).
+    let rescan = Arc::new(Notify::new());
+
+    // Enable management protocol (heartbeat + remote config/log commands,
+    // plus yolink-specific `rescan_devices` action).
+    let rescan_for_mgmt = Arc::clone(&rescan);
     let mgmt = client
         .enable_management(
             60,
@@ -178,7 +185,14 @@ async fn try_start(
             Some(config_path.to_string()),
             Some(log_level_handle),
         )
-        .await?;
+        .await?
+        .with_custom_handler(move |cmd| match cmd["action"].as_str()? {
+            "rescan_devices" => {
+                rescan_for_mgmt.notify_one();
+                Some(serde_json::json!({ "status": "ok" }))
+            }
+            _ => None,
+        });
 
     // Start the SDK event loop FIRST so the MQTT eventloop is pumping while
     // we register devices.  Without this, queued publishes block forever once
@@ -244,14 +258,21 @@ async fn try_start(
     );
 
     // --- Bridge event loop (runs until error / shutdown) ----------------------
+    let inventory_interval_secs = cfg
+        .yolink
+        .inventory_interval_secs
+        .unwrap_or(cfg.yolink.poll_interval_secs);
+
     let bridge = bridge::Bridge::new(
         bridged_devices,
         yolink_api,
         publisher,
         cfg.yolink.temperature_unit.clone(),
         cfg.yolink.poll_interval_secs,
+        inventory_interval_secs,
         cfg.yolink.poll_device_delay_ms,
         cfg.yolink.initial_fetch_delay_secs,
+        rescan,
     );
 
     bridge.run(yolink_rx, cmd_rx).await

@@ -28,6 +28,13 @@ mode = "local"
 # MQTT push events are the primary delivery mechanism; this is a safety true-up.
 poll_interval_secs = 300
 
+# How often to re-scan the hub's device inventory (seconds).
+# Separate from poll_interval_secs so newly-paired devices can be discovered
+# often without paying the cost of a full per-device state refresh.
+# Defaults to poll_interval_secs when unset.  Use the "Rescan devices" button
+# on the plugin's admin page for on-demand rediscovery.
+inventory_interval_secs = 300
+
 # Delay between successive per-device getState calls during a poll cycle (ms).
 # Increase if the hub returns 000201 "Cannot connect to device" rate-limit errors.
 poll_device_delay_ms = 1000

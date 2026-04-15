@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tracing::{debug, info, warn};
 
 use crate::config::TemperatureUnit;
@@ -39,10 +39,14 @@ pub struct Bridge {
     publisher: DevicePublisher,
     temp_unit: TemperatureUnit,
     poll_interval: Duration,
+    inventory_interval: Duration,
     /// Delay between successive per-device getState calls to avoid hub rate limits.
     poll_device_delay: Duration,
     /// Delay before the one-shot background initial state fetch. Zero = disabled.
     initial_fetch_delay: Duration,
+    /// Notified to trigger an immediate `sync_inventory()` on demand
+    /// (e.g. from the `rescan_devices` management command).
+    rescan: Arc<Notify>,
 }
 
 impl Bridge {
@@ -52,8 +56,10 @@ impl Bridge {
         publisher: DevicePublisher,
         temp_unit: TemperatureUnit,
         poll_interval_secs: u64,
+        inventory_interval_secs: u64,
         poll_device_delay_ms: u64,
         initial_fetch_delay_secs: u64,
+        rescan: Arc<Notify>,
     ) -> Self {
         let mut devices = Vec::with_capacity(raw.len());
         let mut index = HashMap::new();
@@ -76,8 +82,10 @@ impl Bridge {
             publisher,
             temp_unit,
             poll_interval: Duration::from_secs(poll_interval_secs),
+            inventory_interval: Duration::from_secs(inventory_interval_secs),
             poll_device_delay: Duration::from_millis(poll_device_delay_ms),
             initial_fetch_delay: Duration::from_secs(initial_fetch_delay_secs),
+            rescan,
         }
     }
 
@@ -94,6 +102,13 @@ impl Bridge {
         // Skip the first poll tick so we don't double-fetch at startup.
         let mut poll_timer = tokio::time::interval(self.poll_interval);
         poll_timer.tick().await;
+
+        // Inventory sync runs on its own cadence so users can rescan often
+        // without paying the cost of a full per-device state refresh.
+        let mut inv_timer = tokio::time::interval(self.inventory_interval);
+        inv_timer.tick().await;
+
+        let rescan = Arc::clone(&self.rescan);
 
         // --- Background initial state fetch ----------------------------------
         if !self.initial_fetch_delay.is_zero() {
@@ -156,9 +171,21 @@ impl Bridge {
                     self.handle_homecore_command(hc_id, cmd).await;
                 }
 
-                // Periodic true-up: state refresh + device name sync
+                // Periodic true-up: full-state refresh of every device.
                 _ = poll_timer.tick() => {
                     self.poll_all_devices().await;
+                }
+
+                // Periodic inventory reconciliation (detects newly-paired
+                // or removed devices).  Runs on its own cadence.
+                _ = inv_timer.tick() => {
+                    self.sync_inventory().await;
+                }
+
+                // On-demand rescan (e.g. "Rescan devices" button in the
+                // Leptos admin UI via the `rescan_devices` management cmd).
+                _ = rescan.notified() => {
+                    info!("Manual rescan requested");
                     self.sync_inventory().await;
                 }
             }

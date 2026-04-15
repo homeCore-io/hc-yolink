@@ -123,6 +123,12 @@ pub struct YolinkConfig {
     #[serde(default = "default_poll_interval")]
     pub poll_interval_secs: u64,
 
+    /// How often to re-scan the hub's device inventory (seconds).
+    /// Lower this (e.g. 300) so newly-paired devices appear without a restart.
+    /// Defaults to `poll_interval_secs` when unset.
+    #[serde(default)]
+    pub inventory_interval_secs: Option<u64>,
+
     /// Delay between individual device polls (milliseconds).
     /// Prevents 000201 "Cannot connect to device" rate-limit errors from the hub.
     #[serde(default = "default_poll_device_delay_ms")]
