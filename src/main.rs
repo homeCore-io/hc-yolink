@@ -192,6 +192,28 @@ async fn try_start(
                 Some(serde_json::json!({ "status": "ok" }))
             }
             _ => None,
+        })
+        .with_capabilities(hc_types::Capabilities {
+            spec: "1".into(),
+            plugin_id: String::new(),
+            actions: vec![hc_types::Action {
+                id: "rescan_devices".into(),
+                label: "Rescan devices".into(),
+                description: Some(
+                    "Refresh the YoLink device inventory from the cloud and republish \
+                     registration for each."
+                        .into(),
+                ),
+                params: None,
+                result: None,
+                stream: false,
+                cancelable: false,
+                concurrency: hc_types::Concurrency::default(),
+                item_key: None,
+                item_operations: None,
+                requires_role: hc_types::RequiresRole::User,
+                timeout_ms: None,
+            }],
         });
 
     // Start the SDK event loop FIRST so the MQTT eventloop is pumping while
