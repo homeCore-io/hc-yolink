@@ -331,6 +331,18 @@ impl Bridge {
             }
             self.devices[idx].retired = true;
         }
+
+        // Cross-restart cleanup: tell the SDK what's live this cycle so
+        // it can prune anything from a prior session whose device_id
+        // isn't in `seen` and which the in-memory loop above couldn't
+        // catch (because self.index starts empty after restart).
+        let live: std::collections::HashSet<String> = seen
+            .iter()
+            .map(|device_id| format!("yolink_{device_id}"))
+            .collect();
+        if let Err(e) = self.publisher.reconcile_devices(live).await {
+            warn!(error = %e, "reconcile_devices failed");
+        }
     }
 
     // -----------------------------------------------------------------------

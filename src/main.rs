@@ -161,7 +161,13 @@ async fn try_start(
         password: cfg.homecore.password.clone(),
     };
 
-    let client = PluginClient::connect(sdk_config).await?;
+    let client = PluginClient::connect(sdk_config)
+        .await?
+        // Cross-restart device tracking so `bridge::sync_inventory`'s
+        // reconcile_devices call can clean up zombies from prior
+        // sessions (devices removed from YoLink while the plugin was
+        // offline). Snapshot lives next to config.toml.
+        .with_device_persistence(published_ids_path(config_path));
     mqtt_log_handle.connect(
         client.mqtt_client(),
         &cfg.homecore.plugin_id,
@@ -298,4 +304,14 @@ async fn try_start(
     );
 
     bridge.run(yolink_rx, cmd_rx).await
+}
+
+/// Path of the cross-restart device-id snapshot, sibling to
+/// config.toml. Owned by the SDK device tracker via
+/// `PluginClient::with_device_persistence`.
+fn published_ids_path(config_path: &str) -> std::path::PathBuf {
+    std::path::Path::new(config_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(".published-device-ids.json")
 }
