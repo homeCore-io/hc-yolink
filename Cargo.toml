@@ -32,6 +32,8 @@ chrono           = { version = "0.4",  features = ["serde"] }
 # Exclude from the parent workspace — this is a standalone repo
 [workspace]
 
+# Size-optimized release profile (matches homeCore-io/homeCore).
 [profile.release]
-opt-level = 3
-strip     = true
+strip         = "symbols"
+lto           = "thin"
+codegen-units = 1
