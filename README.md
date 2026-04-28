@@ -1,5 +1,7 @@
 # hc-yolink
 
+[![CI](https://github.com/homeCore-io/hc-yolink/actions/workflows/ci.yml/badge.svg)](https://github.com/homeCore-io/hc-yolink/actions/workflows/ci.yml) [![Release](https://github.com/homeCore-io/hc-yolink/actions/workflows/release.yml/badge.svg)](https://github.com/homeCore-io/hc-yolink/actions/workflows/release.yml) [![Dashboard](https://img.shields.io/badge/builds-dashboard-blue?style=flat-square)](https://homecore.io/lf-workflow-dash/)
+
 Bridges YoLink smart home devices into HomeCore via the YS1606 local hub (LAN) or cloud MQTT.
 
 ## Supported device types
