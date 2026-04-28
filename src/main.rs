@@ -295,12 +295,14 @@ async fn try_start(
         bridged_devices,
         yolink_api,
         publisher,
-        cfg.yolink.temperature_unit.clone(),
-        cfg.yolink.poll_interval_secs,
-        inventory_interval_secs,
-        cfg.yolink.poll_device_delay_ms,
-        cfg.yolink.initial_fetch_delay_secs,
         rescan,
+        bridge::BridgeOptions {
+            temp_unit: cfg.yolink.temperature_unit.clone(),
+            poll_interval_secs: cfg.yolink.poll_interval_secs,
+            inventory_interval_secs,
+            poll_device_delay_ms: cfg.yolink.poll_device_delay_ms,
+            initial_fetch_delay_secs: cfg.yolink.initial_fetch_delay_secs,
+        },
     );
 
     bridge.run(yolink_rx, cmd_rx).await

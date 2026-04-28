@@ -90,7 +90,7 @@ pub enum TemperatureUnit {
 
 impl TemperatureUnit {
     /// Convert a Celsius value to the target unit.
-    pub fn from_celsius(&self, c: f64) -> f64 {
+    pub fn convert_celsius(&self, c: f64) -> f64 {
         match self {
             TemperatureUnit::C => c,
             TemperatureUnit::F => c * 9.0 / 5.0 + 32.0,
@@ -98,7 +98,7 @@ impl TemperatureUnit {
     }
 
     /// Convert a Fahrenheit value to the target unit.
-    pub fn from_fahrenheit(&self, f: f64) -> f64 {
+    pub fn convert_fahrenheit(&self, f: f64) -> f64 {
         match self {
             TemperatureUnit::F => f,
             TemperatureUnit::C => (f - 32.0) * 5.0 / 9.0,

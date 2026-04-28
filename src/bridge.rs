@@ -49,17 +49,24 @@ pub struct Bridge {
     rescan: Arc<Notify>,
 }
 
+/// Tuning parameters for [`Bridge::new`]. Grouped to keep the constructor's
+/// signature within clippy's `too_many_arguments` threshold and to give
+/// callers a single place to thread cadence/timing config.
+pub struct BridgeOptions {
+    pub temp_unit: TemperatureUnit,
+    pub poll_interval_secs: u64,
+    pub inventory_interval_secs: u64,
+    pub poll_device_delay_ms: u64,
+    pub initial_fetch_delay_secs: u64,
+}
+
 impl Bridge {
     pub fn new(
         raw: Vec<(DeviceInfo, DeviceKind)>,
         yolink_api: Arc<YolinkApi>,
         publisher: DevicePublisher,
-        temp_unit: TemperatureUnit,
-        poll_interval_secs: u64,
-        inventory_interval_secs: u64,
-        poll_device_delay_ms: u64,
-        initial_fetch_delay_secs: u64,
         rescan: Arc<Notify>,
+        opts: BridgeOptions,
     ) -> Self {
         let mut devices = Vec::with_capacity(raw.len());
         let mut index = HashMap::new();
@@ -80,11 +87,11 @@ impl Bridge {
             index,
             yolink_api,
             publisher,
-            temp_unit,
-            poll_interval: Duration::from_secs(poll_interval_secs),
-            inventory_interval: Duration::from_secs(inventory_interval_secs),
-            poll_device_delay: Duration::from_millis(poll_device_delay_ms),
-            initial_fetch_delay: Duration::from_secs(initial_fetch_delay_secs),
+            temp_unit: opts.temp_unit,
+            poll_interval: Duration::from_secs(opts.poll_interval_secs),
+            inventory_interval: Duration::from_secs(opts.inventory_interval_secs),
+            poll_device_delay: Duration::from_millis(opts.poll_device_delay_ms),
+            initial_fetch_delay: Duration::from_secs(opts.initial_fetch_delay_secs),
             rescan,
         }
     }

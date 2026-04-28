@@ -265,10 +265,10 @@ fn translate_th_sensor(data: &Value, unit: &TemperatureUnit) -> Option<Value> {
 
     // Determine raw unit and convert to the configured output unit.
     let temp_out = if raw_unit.contains('C') || raw_unit == "℃" {
-        unit.from_celsius(raw_temp)
+        unit.convert_celsius(raw_temp)
     } else {
         // Assume Fahrenheit
-        unit.from_fahrenheit(raw_temp)
+        unit.convert_fahrenheit(raw_temp)
     };
 
     let mut out = serde_json::json!({
