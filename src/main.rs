@@ -79,7 +79,7 @@ fn init_logging(
     config_path: &str,
 ) -> (
     tracing_appender::non_blocking::WorkerGuard,
-    hc_logging::LogLevelHandle,
+    plugin_sdk_rs::logging::LogLevelHandle,
     plugin_sdk_rs::mqtt_log_layer::MqttLogHandle,
 ) {
     #[derive(serde::Deserialize, Default)]
@@ -106,7 +106,7 @@ fn init_logging(
 async fn try_start(
     cfg: &Config,
     config_path: &str,
-    log_level_handle: hc_logging::LogLevelHandle,
+    log_level_handle: plugin_sdk_rs::logging::LogLevelHandle,
     mqtt_log_handle: plugin_sdk_rs::mqtt_log_layer::MqttLogHandle,
 ) -> Result<()> {
     // Resolve mode-specific endpoints from config
@@ -199,10 +199,10 @@ async fn try_start(
             }
             _ => None,
         })
-        .with_capabilities(hc_types::Capabilities {
+        .with_capabilities(plugin_sdk_rs::types::Capabilities {
             spec: "1".into(),
             plugin_id: String::new(),
-            actions: vec![hc_types::Action {
+            actions: vec![plugin_sdk_rs::types::Action {
                 id: "rescan_devices".into(),
                 label: "Rescan devices".into(),
                 description: Some(
@@ -214,10 +214,10 @@ async fn try_start(
                 result: None,
                 stream: false,
                 cancelable: false,
-                concurrency: hc_types::Concurrency::default(),
+                concurrency: plugin_sdk_rs::types::Concurrency::default(),
                 item_key: None,
                 item_operations: None,
-                requires_role: hc_types::RequiresRole::User,
+                requires_role: plugin_sdk_rs::types::RequiresRole::User,
                 timeout_ms: None,
             }],
         });
