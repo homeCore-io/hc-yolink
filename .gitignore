@@ -26,4 +26,3 @@ config/config.toml
 config/config.dev.toml
 config/.published-device-ids.json
 logs/
-plugins/hc-sonos/
