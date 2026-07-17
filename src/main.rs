@@ -109,51 +109,13 @@ async fn try_start(
     log_level_handle: plugin_sdk_rs::logging::LogLevelHandle,
     mqtt_log_handle: plugin_sdk_rs::mqtt_log_layer::MqttLogHandle,
 ) -> Result<()> {
-    // Resolve mode-specific endpoints from config
-    let ep = Endpoints::from_config(&cfg.yolink)?;
-
-    // --- Auth -----------------------------------------------------------------
-    let tokens = auth::TokenManager::new(
-        ep.token_url.clone(),
-        ep.client_id.clone(),
-        ep.client_secret.clone(),
-    );
-    tokens.init().await?;
-    // No background refresh task — get_token() does lazy refresh on demand.
-    // Proactive refresh was causing the YoLink hub to invalidate the active
-    // MQTT session when a new token was issued, dropping the connection.
-    info!("YoLink authentication successful");
-
-    // --- YoLink API client ----------------------------------------------------
-    let yolink_api = Arc::new(YolinkApi::new(ep.api_base_url.clone(), tokens.clone()));
-
-    // --- Build MQTT topic prefix (mode-specific) ------------------------------
-    // Cloud: yl-home/{home_id}   — home_id fetched from the API
-    // Local: ylsubnet/{net_id}   — net_id comes directly from config credentials
-    let topic_prefix = match cfg.yolink.mode {
-        config::Mode::Cloud => {
-            let home_id = yolink_api.get_home_id().await?;
-            info!(home_id = %home_id, "YoLink home ID obtained");
-            format!("yl-home/{home_id}")
-        }
-        config::Mode::Local => {
-            let net_id = &ep.net_id;
-            info!(net_id = %net_id, "Using local hub Net ID for MQTT topics");
-            format!("ylsubnet/{net_id}")
-        }
-    };
-
-    // --- YoLink MQTT event stream ---------------------------------------------
-    let (yolink_tx, yolink_rx) = mpsc::channel::<YolinkReport>(256);
-    let yl_mqtt = YolinkMqtt::new(
-        ep.mqtt_host.clone(),
-        ep.mqtt_port,
-        ep.client_id.clone(),
-        tokens.clone(),
-    );
-    tokio::spawn(yl_mqtt.run(topic_prefix, yolink_tx));
-
-    // --- HomeCore MQTT (via SDK) ----------------------------------------------
+    // --- HomeCore MQTT (via SDK) — brought up FIRST ----------------------------
+    // Connect to the broker and enable the management protocol (which carries
+    // the operator-config schema) BEFORE any YoLink endpoint resolution / cloud
+    // auth.  This lets the plugin install and serve its schema on a minimal
+    // `[homecore]`-only config, so the operator can enter credentials in the
+    // Studio and then restart — exactly like hc-caseta comes up before it
+    // touches its hardware bridge.
     let sdk_config = PluginConfig {
         broker_host: cfg.homecore.broker_host.clone(),
         broker_port: cfg.homecore.broker_port,
@@ -222,11 +184,19 @@ async fn try_start(
             }],
         });
 
-    // Start the SDK event loop FIRST so the MQTT eventloop is pumping while
-    // we register devices.  Without this, queued publishes block forever once
-    // the rumqttc internal buffer (64) fills up.
+    // Publish the operator-config JSON Schema so the hc-web editor renders a
+    // typed form (rides on the capability manifest).
+    let mgmt = match config::config_schema() {
+        Some(schema) => mgmt.with_config_schema(schema),
+        None => mgmt,
+    };
+
+    // Start the SDK event loop so management (heartbeat, config, schema) is
+    // served immediately.  Without this, queued publishes block forever once
+    // the rumqttc internal buffer (64) fills up.  Keep the handle so we can
+    // block on it in the not-yet-configured case below.
     let cmd_tx_clone = cmd_tx.clone();
-    tokio::spawn(async move {
+    let sdk_task = tokio::spawn(async move {
         if let Err(e) = client
             .run_managed(
                 move |device_id, payload| {
@@ -242,6 +212,68 @@ async fn try_start(
 
     // Brief yield to let the eventloop connect before we start publishing.
     tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // --- Not configured yet?  Stay up serving management only ------------------
+    // With neither a cloud nor a local credential section the operator hasn't
+    // entered credentials.  Skip endpoint resolution + the YoLink connection
+    // entirely (no unwrap, no exit) and keep the plugin running with management
+    // enabled, so the Studio can edit its config.  It connects normally once
+    // creds are set and the plugin is restarted.
+    if cfg.yolink.cloud.is_none() && cfg.yolink.local.is_none() {
+        warn!(
+            "YoLink not configured yet — set cloud or local credentials in the \
+             UI, then restart. Management is enabled; keeping the plugin running \
+             so its config can be edited."
+        );
+        // Block on the SDK task so the process stays alive serving management.
+        let _ = sdk_task.await;
+        return Ok(());
+    }
+
+    // --- YoLink endpoints + auth (configured path) -----------------------------
+    // Resolve mode-specific endpoints from config
+    let ep = Endpoints::from_config(&cfg.yolink)?;
+
+    // --- Auth -----------------------------------------------------------------
+    let tokens = auth::TokenManager::new(
+        ep.token_url.clone(),
+        ep.client_id.clone(),
+        ep.client_secret.clone(),
+    );
+    tokens.init().await?;
+    // No background refresh task — get_token() does lazy refresh on demand.
+    // Proactive refresh was causing the YoLink hub to invalidate the active
+    // MQTT session when a new token was issued, dropping the connection.
+    info!("YoLink authentication successful");
+
+    // --- YoLink API client ----------------------------------------------------
+    let yolink_api = Arc::new(YolinkApi::new(ep.api_base_url.clone(), tokens.clone()));
+
+    // --- Build MQTT topic prefix (mode-specific) ------------------------------
+    // Cloud: yl-home/{home_id}   — home_id fetched from the API
+    // Local: ylsubnet/{net_id}   — net_id comes directly from config credentials
+    let topic_prefix = match cfg.yolink.mode {
+        config::Mode::Cloud => {
+            let home_id = yolink_api.get_home_id().await?;
+            info!(home_id = %home_id, "YoLink home ID obtained");
+            format!("yl-home/{home_id}")
+        }
+        config::Mode::Local => {
+            let net_id = &ep.net_id;
+            info!(net_id = %net_id, "Using local hub Net ID for MQTT topics");
+            format!("ylsubnet/{net_id}")
+        }
+    };
+
+    // --- YoLink MQTT event stream ---------------------------------------------
+    let (yolink_tx, yolink_rx) = mpsc::channel::<YolinkReport>(256);
+    let yl_mqtt = YolinkMqtt::new(
+        ep.mqtt_host.clone(),
+        ep.mqtt_port,
+        ep.client_id.clone(),
+        tokens.clone(),
+    );
+    tokio::spawn(yl_mqtt.run(topic_prefix, yolink_tx));
 
     // --- Device discovery -----------------------------------------------------
     let raw_devices = yolink_api.get_device_list().await?;

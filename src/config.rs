@@ -1,13 +1,27 @@
 use anyhow::{bail, Result};
 use serde::Deserialize;
 
+/// Operator-config JSON Schema, published on the capability manifest so the
+/// hc-web editor renders a typed form. `None` without the `schema` feature.
+#[cfg(feature = "schema")]
+pub fn config_schema() -> Option<serde_json::Value> {
+    serde_json::to_value(schemars::schema_for!(Config)).ok()
+}
+
+#[cfg(not(feature = "schema"))]
+pub fn config_schema() -> Option<serde_json::Value> {
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Top-level
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Config {
     pub homecore: HomecoreConfig,
+    #[serde(default)]
     pub yolink: YolinkConfig,
     #[serde(default)]
     pub logging: crate::logging::LoggingConfig,
@@ -24,6 +38,13 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
+        // Minimal/unconfigured bootstrap (e.g. the sandbox writes just a
+        // `[homecore]` block): with neither a cloud nor a local section the
+        // operator hasn't entered credentials yet. Allow startup so the plugin
+        // can publish its operator-config schema before creds are filled in.
+        if self.yolink.cloud.is_none() && self.yolink.local.is_none() {
+            return Ok(());
+        }
         match self.yolink.mode {
             Mode::Cloud if self.yolink.cloud.is_none() => {
                 bail!("[yolink.cloud] section is required when mode = \"cloud\"");
@@ -42,6 +63,7 @@ impl Config {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct HomecoreConfig {
     #[serde(default = "default_broker_host")]
     pub broker_host: String,
@@ -49,6 +71,7 @@ pub struct HomecoreConfig {
     pub broker_port: u16,
     #[serde(default = "default_plugin_id")]
     pub plugin_id: String,
+    #[serde(default)]
     pub password: String,
 }
 
@@ -67,6 +90,7 @@ fn default_plugin_id() -> String {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     Cloud,
@@ -78,6 +102,7 @@ pub enum Mode {
 /// YoLink devices report their own unit in the `tempUnit` field; this plugin
 /// always converts to the configured unit before publishing.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum TemperatureUnit {
     /// Degrees Celsius
     #[serde(rename = "C")]
@@ -115,6 +140,7 @@ impl TemperatureUnit {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct YolinkConfig {
     pub mode: Mode,
 
@@ -148,6 +174,25 @@ pub struct YolinkConfig {
     pub local: Option<LocalConfig>,
 }
 
+impl Default for YolinkConfig {
+    fn default() -> Self {
+        Self {
+            // No credentials configured yet — the operator picks a mode and
+            // fills in cloud/local before the plugin can talk to a hub. This
+            // default just lets the config parse from a `[homecore]`-only file
+            // so the operator-config schema can be published first.
+            mode: Mode::Cloud,
+            poll_interval_secs: default_poll_interval(),
+            inventory_interval_secs: None,
+            poll_device_delay_ms: default_poll_device_delay_ms(),
+            initial_fetch_delay_secs: default_initial_fetch_delay_secs(),
+            temperature_unit: TemperatureUnit::default(),
+            cloud: None,
+            local: None,
+        }
+    }
+}
+
 fn default_poll_interval() -> u64 {
     3600
 }
@@ -163,6 +208,7 @@ fn default_initial_fetch_delay_secs() -> u64 {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CloudConfig {
     /// User Access Credential ID (from YoLink App → Account → Personal Access Credentials)
     pub uaid: String,
@@ -192,6 +238,7 @@ fn default_cloud_mqtt_port() -> u16 {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LocalConfig {
     /// Local IP address (or hostname) of the YS1606 hub on the LAN
     pub hub_ip: String,
@@ -240,7 +287,9 @@ impl Endpoints {
     pub fn from_config(cfg: &YolinkConfig) -> Result<Self> {
         match cfg.mode {
             Mode::Cloud => {
-                let c = cfg.cloud.as_ref().unwrap();
+                let c = cfg.cloud.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("[yolink.cloud] section is required when mode = \"cloud\"")
+                })?;
                 Ok(Self {
                     token_url: format!("{}/open/yolink/token", c.api_url),
                     api_base_url: c.api_url.clone(),
@@ -252,7 +301,9 @@ impl Endpoints {
                 })
             }
             Mode::Local => {
-                let l = cfg.local.as_ref().unwrap();
+                let l = cfg.local.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("[yolink.local] section is required when mode = \"local\"")
+                })?;
                 let base = format!("http://{}:{}", l.hub_ip, l.api_port);
                 Ok(Self {
                     token_url: format!("{}/open/yolink/token", base),
