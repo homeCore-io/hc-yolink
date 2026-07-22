@@ -191,6 +191,10 @@ async fn try_start(
         None => mgmt,
     };
 
+    // …and the plugin-authored descriptor the editor renders instead of
+    // guessing a form from the schema. Rides the same manifest.
+    let mgmt = mgmt.with_config_descriptor(config::config_descriptor());
+
     // Start the SDK event loop so management (heartbeat, config, schema) is
     // served immediately.  Without this, queued publishes block forever once
     // the rumqttc internal buffer (64) fills up.  Keep the handle so we can
