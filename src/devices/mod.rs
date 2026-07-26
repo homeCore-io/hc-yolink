@@ -206,10 +206,18 @@ fn translate_multi_outlet(data: &Value) -> Option<Value> {
 fn translate_door_sensor(data: &Value) -> Option<Value> {
     // state == "open" → door open, "close" or "closed" → closed
     let open = state_str(data).map(|s| s == "open")?;
-    let mut out = serde_json::json!({
-        "open": open,
-        "contact": open,
-    });
+    // Just `open`. This used to publish `contact` alongside it carrying the
+    // SAME value, which is the opposite of what `contact` conventionally means
+    // — a closed contact circuit is a shut door — so every client that keyed
+    // on the name read the sensor backwards. Two names for one reading is also
+    // two entries in every attribute list, twice in a group's member list, and
+    // one more thing for a rule author to choose between with no difference
+    // between the choices.
+    //
+    // `device_type` is still `contact_sensor`; only the redundant attribute is
+    // gone. A full state publish replaces the stored map, so the key clears
+    // itself on the next report.
+    let mut out = serde_json::json!({ "open": open });
     if let Some(b) = battery_pct(data) {
         out["battery"] = b;
     }
@@ -385,7 +393,7 @@ mod tests {
             .translate_state(&data, &TemperatureUnit::F)
             .unwrap();
         assert_eq!(state["open"], json!(true));
-        assert_eq!(state["contact"], json!(true));
+        assert!(state.get("contact").is_none(), "the alias is gone");
         assert_eq!(state["battery"], json!(75)); // 3/4 = 75%
     }
 
@@ -397,7 +405,7 @@ mod tests {
             .translate_state(&data, &TemperatureUnit::F)
             .unwrap();
         assert_eq!(state["open"], json!(true));
-        assert_eq!(state["contact"], json!(true));
+        assert!(state.get("contact").is_none(), "the alias is gone");
         assert_eq!(state["battery"], json!(100));
     }
 
@@ -408,7 +416,7 @@ mod tests {
             .translate_state(&data, &TemperatureUnit::F)
             .unwrap();
         assert_eq!(state["open"], json!(false));
-        assert_eq!(state["contact"], json!(false));
+        assert!(state.get("contact").is_none(), "the alias is gone");
     }
 
     #[test]

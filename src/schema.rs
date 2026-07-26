@@ -6,15 +6,16 @@
 //! a switch, a number got a slider, and the attribute's *meaning* came from a
 //! lexicon keyed on its name.
 //!
-//! That inference is wrong here in a way nobody could see from the client side.
-//! [`translate_door_sensor`](crate::devices) publishes `contact` equal to
-//! `open` — `contact: true` means the door is OPEN. The near-universal
-//! convention is the reverse: a *closed* contact circuit means the door is
-//! shut, and that is what a client lexicon assumes. So every hc-yolink door
-//! sensor read backwards in any UI that trusted the name.
+//! Naming both states of a boolean is the point. A boolean attribute is two
+//! events — a door opens and a door closes — and a client given only one name
+//! offers one row, leaving the other direction to a Not gate wrapped round the
+//! trigger.
 //!
-//! Declaring [`BoolStates`] is what settles it. The plugin knows which way
-//! round its own attribute runs; the client does not and cannot.
+//! This plugin also used to publish a `contact` attribute carrying the same
+//! value as `open`, which is the reverse of what `contact` conventionally
+//! means, so any client keying on the name read the sensor backwards. The
+//! alias is gone; `open` says what it says, and [`BoolStates`] names both ends
+//! of it.
 //!
 //! **Only what the translators actually emit appears here.** An attribute
 //! declared but never published is a control for something that does not exist,
@@ -109,14 +110,6 @@ pub fn schema_for(kind: &DeviceKind) -> Option<DeviceSchema> {
             a.insert(
                 "open".into(),
                 ro_bool("Door", ("open", "opens"), ("closed", "closes")),
-            );
-            // THE INVERSION. This plugin publishes `contact` equal to `open`,
-            // so `contact: true` means the door is OPEN — the opposite of the
-            // convention a client lexicon encodes. Saying so here is the entire
-            // reason a plugin gets to declare these names.
-            a.insert(
-                "contact".into(),
-                ro_bool("Contact", ("open", "opens"), ("closed", "closes")),
             );
             a.insert("battery".into(), battery());
         }
@@ -288,26 +281,28 @@ mod tests {
         }
     }
 
-    /// The bug this whole feature exists to fix.
+    /// A door sensor reports `open` and nothing that duplicates it.
     ///
-    /// `translate_door_sensor` sets `contact` equal to `open`, so `contact:
-    /// true` means the door is OPEN — the opposite of the usual convention,
-    /// where a closed contact circuit means the door is shut. A client lexicon
-    /// keyed on the attribute *name* gets this backwards every time.
+    /// The `contact` alias carried the same value under a name that
+    /// conventionally means the opposite, so every client keying on the name
+    /// read the sensor backwards — and it put two identical choices in front
+    /// of anyone writing a rule.
     #[test]
-    fn contact_is_declared_the_way_this_plugin_actually_publishes_it() {
+    fn a_door_reports_open_and_no_alias_for_it() {
         let schema = schema_for(&DeviceKind::DoorSensor).unwrap();
-        let contact = schema.attributes["contact"].states.as_ref().unwrap();
-        assert_eq!(contact.get(true).label, "open");
-        assert_eq!(contact.get(false).label, "closed");
+        assert!(schema.attributes.contains_key("open"));
+        assert!(!schema.attributes.contains_key("contact"));
 
-        // And it agrees with the translator, which is the actual authority.
-        let open_report = json!({ "state": "open" });
+        let open = schema.attributes["open"].states.as_ref().unwrap();
+        assert_eq!(open.get(true).label, "open");
+        assert_eq!(open.get(false).label, "closed");
+
+        // And the translator agrees, which is the actual authority.
         let state = DeviceKind::DoorSensor
-            .translate_state(&open_report, &TemperatureUnit::C)
+            .translate_state(&json!({ "state": "open" }), &TemperatureUnit::C)
             .unwrap();
-        assert_eq!(state["contact"], json!(true));
         assert_eq!(state["open"], json!(true));
+        assert!(state.get("contact").is_none());
     }
 
     /// A declared attribute the device never publishes is a control for
