@@ -128,8 +128,6 @@ pub fn schema_for(kind: &DeviceKind) -> Option<DeviceSchema> {
 
         DeviceKind::LeakSensor => {
             let wet = || ro_bool("Water", ("wet", "detects water"), ("dry", "dries out"));
-            // Both names are published, carrying the same reading.
-            a.insert("leak".into(), wet());
             a.insert("water_detected".into(), wet());
             a.insert("battery".into(), battery());
         }

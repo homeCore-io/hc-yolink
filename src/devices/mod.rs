@@ -244,10 +244,11 @@ fn translate_leak_sensor(data: &Value) -> Option<Value> {
         .or_else(|| data["state"]["alarm"].as_bool())
         .or_else(|| data["state"].as_str().map(|s| s == "alert"))
         .unwrap_or(false);
-    let mut out = serde_json::json!({
-        "leak": leak,
-        "water_detected": leak,
-    });
+    // One name, and it is `water_detected` rather than the shorter `leak`:
+    // that is the one a live rule already triggers on, and breaking a working
+    // rule to win a naming preference is the wrong trade. See the note on
+    // `translate_door_sensor` for why two names for one reading is a cost.
+    let mut out = serde_json::json!({ "water_detected": leak });
     if let Some(b) = battery_pct(data) {
         out["battery"] = b;
     }
@@ -428,14 +429,21 @@ mod tests {
         assert_eq!(state["motion"], json!(true));
     }
 
+    /// One key, not two.
+    ///
+    /// This asserted both `leak` and `water_detected` — the "canonical and
+    /// legacy" pair. Two names for one reading meant the sensor appeared twice
+    /// in every attribute list and offered two identical choices to anyone
+    /// writing a rule. `water_detected` is the survivor because a live rule
+    /// already triggers on it.
     #[test]
-    fn leak_sensor_sets_canonical_and_legacy_keys() {
+    fn a_leak_sensor_reports_one_name_for_one_reading() {
         let data = json!({ "alarm": true, "battery": 2 });
         let state = DeviceKind::LeakSensor
             .translate_state(&data, &TemperatureUnit::F)
             .unwrap();
-        assert_eq!(state["leak"], json!(true));
         assert_eq!(state["water_detected"], json!(true));
+        assert!(state.get("leak").is_none(), "the alias is gone");
     }
 
     #[test]
