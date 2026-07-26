@@ -3,6 +3,7 @@ mod bridge;
 mod config;
 mod devices;
 mod logging;
+mod schema;
 mod yolink;
 
 use anyhow::Result;
@@ -306,6 +307,11 @@ async fn try_start(
             .await
         {
             warn!(hc_id, error = %e, "Failed to register device");
+        }
+        // The schema is retained, so it survives this plugin being down and a
+        // client that connects later still knows what the device means.
+        if let Err(e) = schema::publish(&publisher, &hc_id, &kind).await {
+            warn!(hc_id, error = %e, "Failed to publish device schema");
         }
         if let Err(e) = publisher.subscribe_commands(&hc_id).await {
             warn!(hc_id, error = %e, "Failed to subscribe commands");
