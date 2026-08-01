@@ -257,6 +257,10 @@ impl Bridge {
                     }
                 }
 
+                if let Err(e) = crate::schema::publish(&self.publisher, &hc_id, &kind).await {
+                    warn!(hc_id = %hc_id, error = %e, "Inventory sync: publish schema failed");
+                }
+
                 let dev = &mut self.devices[idx];
                 dev.info = info;
                 dev.kind = kind;
@@ -279,6 +283,9 @@ impl Bridge {
             {
                 warn!(hc_id = %hc_id, error = %e, "Inventory sync: register_device failed");
                 continue;
+            }
+            if let Err(e) = crate::schema::publish(&self.publisher, &hc_id, &kind).await {
+                warn!(hc_id = %hc_id, error = %e, "Inventory sync: publish schema failed");
             }
             if let Err(e) = self.publisher.subscribe_commands(&hc_id).await {
                 warn!(hc_id = %hc_id, error = %e, "Inventory sync: subscribe_commands failed");

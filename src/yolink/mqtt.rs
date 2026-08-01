@@ -1,4 +1,6 @@
 use anyhow::Result;
+use plugin_sdk_rs::types::PluginNotice;
+use plugin_sdk_rs::PluginNotices;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use serde_json::Value;
 use std::sync::Arc;
@@ -16,6 +18,10 @@ pub struct YolinkMqtt {
     /// YoLink Client ID — used as the MQTT *username* (token is the password).
     yolink_client_id: String,
     tokens: Arc<TokenManager>,
+    /// What the operator sees when the YoLink stream is down. Reconnection is
+    /// silent apart from a log line, and a plugin with a dead event stream
+    /// still reads "active" while every sensor quietly stops updating.
+    notices: PluginNotices,
 }
 
 impl YolinkMqtt {
@@ -24,12 +30,14 @@ impl YolinkMqtt {
         port: u16,
         yolink_client_id: String,
         tokens: Arc<TokenManager>,
+        notices: PluginNotices,
     ) -> Self {
         Self {
             host,
             port,
             yolink_client_id,
             tokens,
+            notices,
         }
     }
 
@@ -59,6 +67,21 @@ impl YolinkMqtt {
                         backoff_secs = MIN_BACKOFF;
                     }
                     error!(error = %e, backoff_secs, "YoLink MQTT connection lost; reconnecting");
+                    self.notices.raise(
+                        PluginNotice::error(
+                            "stream_disconnected",
+                            format!(
+                                "The YoLink event stream at {}:{} is down — {e}. Device \
+                                 states will not update until it reconnects.",
+                                self.host, self.port
+                            ),
+                        )
+                        .with_remedy(
+                            "If this persists, check the Client ID and Secret under \
+                             Configuration — a rejected credential looks like a dropped \
+                             connection here. Cloud mode also needs outbound internet.",
+                        ),
+                    );
                     tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                     backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF);
                 }
@@ -77,6 +100,9 @@ impl YolinkMqtt {
         opts.set_credentials(&self.yolink_client_id, &token);
 
         let (client, mut eventloop) = AsyncClient::new(opts, 128);
+        // A token was obtained and the client is built — the credentials are
+        // good and we are past the failure this notice describes.
+        self.notices.clear("stream_disconnected");
 
         // Cloud:  yl-home/{home_id}/+/report
         // Local:  ylsubnet/{net_id}/+/report
