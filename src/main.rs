@@ -7,6 +7,7 @@ mod schema;
 mod yolink;
 
 use anyhow::Result;
+use plugin_sdk_rs::types::PluginNotice;
 use plugin_sdk_rs::{PluginClient, PluginConfig};
 use std::sync::Arc;
 use std::time::Duration;
@@ -137,6 +138,8 @@ async fn try_start(
         &cfg.logging.log_forward_level,
     );
     let publisher = client.device_publisher();
+    // Conditions for the plugin page, not only the log.
+    let notices = client.notices();
     let (cmd_tx, cmd_rx) = mpsc::channel::<(String, serde_json::Value)>(256);
 
     // Rescan trigger — shared between the management command handler and the
@@ -239,6 +242,21 @@ async fn try_start(
     // Resolve mode-specific endpoints from config
     let ep = Endpoints::from_config(&cfg.yolink)?;
 
+    if ep.client_id.trim().is_empty() || ep.client_secret.trim().is_empty() {
+        notices.raise(
+            PluginNotice::error(
+                "not_configured",
+                "No YoLink Client ID and Secret are set, so this plugin cannot \
+                 authenticate and will publish no devices.",
+            )
+            .with_remedy(
+                "Get a UAC Client ID and Secret from the YoLink app under Settings → \
+                 Account → Advanced Settings → User Access Credentials, and enter them \
+                 under Configuration.",
+            ),
+        );
+    }
+
     // --- Auth -----------------------------------------------------------------
     let tokens = auth::TokenManager::new(
         ep.token_url.clone(),
@@ -277,6 +295,7 @@ async fn try_start(
         ep.mqtt_port,
         ep.client_id.clone(),
         tokens.clone(),
+        notices.clone(),
     );
     tokio::spawn(yl_mqtt.run(topic_prefix, yolink_tx));
 
