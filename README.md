@@ -20,10 +20,26 @@ Bridges YoLink smart home devices into HomeCore via the YS1606 local hub (LAN) o
 
 ## Setup
 
-1. Copy `config/config.toml.example` to `config/config.toml`
-2. Set mode (`"local"` for YS1606 hub or `"cloud"` for cloud MQTT)
-3. Fill in credentials (`client_id`, `client_secret`, `net_id` for local; `uaid`, `secret_key` for cloud)
-4. Add a `[[plugins]]` entry in `homecore.toml`
+Install it from the web UI — **Plugins → Add** — then open its
+**Configuration** tab and:
+
+1. Set the mode — `"local"` for a YS1606 hub, `"cloud"` for YoLink's cloud MQTT.
+2. Fill in the credentials: `client_id`, `client_secret`, and `net_id` for
+   local; `uaid` and `secret_key` for cloud.
+
+homeCore records the install itself, so there is no `[[plugins]]` block to
+write. It owns the config file too — `config/plugins/plugin.yolink.toml` under
+homeCore's home directory — and restarts the plugin when that file changes.
+
+## Notices
+
+Problems are reported as **notices**, shown on the plugin's card in the web
+UI. They are state rather than log lines.
+
+| Code | Means |
+|---|---|
+| `not_configured` | No credentials yet for the selected mode. |
+| `stream_disconnected` | The MQTT stream dropped and devices are no longer updating. Clears on reconnect. |
 
 ## Configuration highlights
 
