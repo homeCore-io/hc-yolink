@@ -10,7 +10,7 @@ use crate::config::TemperatureUnit;
 use crate::devices::DeviceKind;
 use crate::yolink::{
     api::YolinkApi,
-    types::{DeviceInfo, YolinkReport},
+    types::{is_device_unreachable, is_transient, DeviceInfo, YolinkReport},
 };
 use plugin_sdk_rs::DevicePublisher;
 
@@ -143,7 +143,7 @@ impl Bridge {
                         tokio::time::sleep(device_delay).await;
                     }
 
-                    match api.get_device_state(&dev.info).await {
+                    match get_state_retrying(&api, &dev.info).await {
                         Ok(data) => {
                             let online = data["online"].as_bool().unwrap_or(true);
                             let _ = publisher.publish_availability(&dev.hc_id, online).await;
@@ -153,6 +153,11 @@ impl Bridge {
                                         "Initial fetch: failed to publish state");
                                 }
                             }
+                        }
+                        Err(e) if is_device_unreachable(&e) => {
+                            warn!(hc_id = %dev.hc_id, error = %e,
+                                "Initial fetch: device still unreachable after retries, marking offline");
+                            let _ = publisher.publish_availability(&dev.hc_id, false).await;
                         }
                         Err(e) => {
                             warn!(hc_id = %dev.hc_id, error = %e,
@@ -296,13 +301,18 @@ impl Bridge {
                 tokio::time::sleep(self.poll_device_delay).await;
             }
 
-            match self.yolink_api.get_device_state(&info).await {
+            match self.get_state_retrying(&info).await {
                 Ok(data) => {
                     let online = data["online"].as_bool().unwrap_or(true);
                     let _ = self.publisher.publish_availability(&hc_id, online).await;
                     if let Some(state) = kind.translate_state(&data, &self.temp_unit) {
                         let _ = self.publisher.publish_state(&hc_id, &state).await;
                     }
+                }
+                Err(e) if is_device_unreachable(&e) => {
+                    debug!(hc_id = %hc_id, error = %e,
+                        "Inventory sync: new device unreachable after retries, registering as offline");
+                    let _ = self.publisher.publish_availability(&hc_id, false).await;
                 }
                 Err(e) => {
                     warn!(hc_id = %hc_id, error = %e, "Inventory sync: initial state fetch failed");
@@ -397,7 +407,10 @@ impl Bridge {
         }
 
         // Translate and publish state as a partial update (merge-patch)
-        if let Some(patch) = dev.kind.translate_state(&report.data, &self.temp_unit) {
+        if let Some(patch) = dev
+            .kind
+            .translate_report(&report.event, &report.data, &self.temp_unit)
+        {
             debug!(
                 hc_id = %dev.hc_id,
                 yolink_device_id = %report.device_id,
@@ -479,7 +492,7 @@ impl Bridge {
                 tokio::time::sleep(self.poll_device_delay).await;
             }
 
-            match self.yolink_api.get_device_state(&dev.info).await {
+            match self.get_state_retrying(&dev.info).await {
                 Ok(data) => {
                     debug!(
                         hc_id = %dev.hc_id,
@@ -523,11 +536,50 @@ impl Bridge {
                         );
                     }
                 }
+                Err(e) if is_device_unreachable(&e) => {
+                    // Still unreachable after the retries above, so the busy-radio
+                    // explanation has run out and this is most likely a device
+                    // with flat batteries or out of range. Say so through
+                    // availability, which is what feeds the "needs attention"
+                    // list.
+                    //
+                    // Before this, an unreachable device produced a warning and
+                    // nothing else: core went on believing it was available, so
+                    // a lock with dead batteries sat there looking healthy and
+                    // never appeared in any alert. The only trace was a log line
+                    // once an hour, which is exactly where nobody looks.
+                    warn!(hc_id = %dev.hc_id, error = %e,
+                        "Poll: device still unreachable after retries, marking offline");
+                    let _ = self.publisher.publish_availability(&dev.hc_id, false).await;
+                }
                 Err(e) => {
                     warn!(hc_id = %dev.hc_id, error = %e, "Poll: getState failed");
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Fetch with retry
+    // -----------------------------------------------------------------------
+
+    /// `getState`, retrying the errors that clear on their own.
+    ///
+    /// `000201` ("cannot connect to the device") is usually the LoRa channel
+    /// being busy rather than anything wrong with the device — the more devices
+    /// on the hub, the more often it happens, and a retry a second later
+    /// normally succeeds. The rate-limit codes behave the same way.
+    ///
+    /// This matters because the caller uses exhausted retries as evidence the
+    /// device is actually dead. Without the retries that inference is wrong,
+    /// and a busy radio would flap a healthy lock to "offline" and raise an
+    /// alert about it.
+    ///
+    /// Backoff is 1s, 2s, 4s. Short, because a poll of a large install is
+    /// already sequential and slow, and the device delay between polls gives
+    /// the channel room anyway.
+    async fn get_state_retrying(&self, info: &DeviceInfo) -> Result<Value, anyhow::Error> {
+        get_state_retrying(&self.yolink_api, info).await
     }
 
     // -----------------------------------------------------------------------
@@ -537,4 +589,31 @@ impl Bridge {
     fn find_by_yolink_id(&self, yolink_id: &str) -> Option<&Device> {
         self.index.get(yolink_id).map(|&i| &self.devices[i])
     }
+}
+
+/// Free function so the detached startup-fetch task, which owns an `Arc<YolinkApi>`
+/// rather than a `&Bridge`, retries on exactly the same terms as the poll loop.
+async fn get_state_retrying(api: &YolinkApi, info: &DeviceInfo) -> Result<Value, anyhow::Error> {
+    const ATTEMPTS: u32 = 3;
+
+    let mut last: Option<anyhow::Error> = None;
+    for attempt in 0..ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(1 << (attempt - 1))).await;
+        }
+        match api.get_device_state(info).await {
+            Ok(v) => return Ok(v),
+            Err(e) if is_transient(&e) => {
+                debug!(
+                    device_id = %info.device_id,
+                    attempt = attempt + 1,
+                    error = %e,
+                    "getState hit a transient error, retrying"
+                );
+                last = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.expect("loop runs at least once and only stores on error"))
 }

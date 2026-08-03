@@ -36,7 +36,16 @@ poll_interval_secs = 300
 inventory_interval_secs = 300
 
 # Delay between successive per-device getState calls during a poll cycle (ms).
-# Increase if the hub returns 000201 "Cannot connect to device" rate-limit errors.
+# Increase if the hub starts refusing calls when polling a large install.
+#
+# 000201 "Cannot connect to the device" is usually LoRa channel contention —
+# the more devices on the hub, the more often it happens — so spacing the polls
+# out genuinely helps. The plugin also retries it three times with backoff, and
+# only publishes the device as offline once those are exhausted, which is what
+# a flat battery looks like from here.
+#
+# The strict rate limits are separate codes: 020104 (more than six requests to
+# one device in a minute) and 010301 (account-level throttling).
 poll_device_delay_ms = 1000
 
 # Temperature unit published to HomeCore.
