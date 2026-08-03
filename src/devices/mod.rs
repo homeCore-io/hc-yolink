@@ -83,6 +83,33 @@ impl DeviceKind {
     // State translation: YoLink report/state data → HomeCore state JSON
     // -----------------------------------------------------------------------
 
+    /// Translate a real-time MQTT report into a HomeCore state *patch*.
+    ///
+    /// Separate from [`Self::translate_state`] because a report is not a
+    /// snapshot. Most events carry the device's state and translate identically,
+    /// but some carry only a measurement, and those have no `state` field at
+    /// all — [`translate_state`](Self::translate_state) correctly refuses them,
+    /// because publishing a stateless object as a full retained state would
+    /// erase everything it omits.
+    ///
+    /// Patches have no such problem: they merge. So the report path can accept
+    /// events the snapshot path must not.
+    pub fn translate_report(
+        &self,
+        event: &str,
+        data: &Value,
+        temp_unit: &TemperatureUnit,
+    ) -> Option<Value> {
+        // `Outlet.powerReport` is the only one of these seen in the wild, and it
+        // arrives hourly from every metered plug. It was logged as an
+        // untranslatable payload every time — 137 warnings in the retained logs,
+        // all of them the plug doing exactly what it is supposed to.
+        if event.ends_with(".powerReport") {
+            return translate_power_report(data);
+        }
+        self.translate_state(data, temp_unit)
+    }
+
     /// Translate device data from a YoLink report or getState response into a
     /// HomeCore-compatible state JSON object.
     ///
@@ -195,6 +222,29 @@ fn translate_switch(data: &Value) -> Option<Value> {
     }
 
     Some(out)
+}
+
+/// `Outlet.powerReport` — an hourly power history, and nothing else.
+///
+/// ```json
+/// { "watts": [ { "time": 1785716447119, "watt": 0 }, ... ] }
+/// ```
+///
+/// There is no `state` here, so this says nothing about whether the outlet is
+/// on; the patch deliberately carries only `power_w`, leaving `on` to the
+/// events and polls that actually know.
+///
+/// The newest sample is picked by timestamp rather than by position. The hub
+/// has always sent them newest-first, but nothing documents that, and reading
+/// index 0 on a hub that changed its mind would publish an hours-old reading as
+/// current — a wrong number, which is worse than the missing one this replaces.
+fn translate_power_report(data: &Value) -> Option<Value> {
+    let newest = data["watts"]
+        .as_array()?
+        .iter()
+        .max_by_key(|s| s["time"].as_i64().unwrap_or(i64::MIN))?;
+    let w = newest["watt"].as_f64()?;
+    Some(serde_json::json!({ "power_w": round1(w) }))
 }
 
 fn translate_multi_outlet(data: &Value) -> Option<Value> {
@@ -366,6 +416,65 @@ fn round3(v: f64) -> f64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The exact payload from the live plug, which used to produce a warning
+    /// and no state at all.
+    #[test]
+    fn outlet_power_report_publishes_watts() {
+        let data = json!({ "watts": [
+            { "time": 1785716447119i64, "watt": 41.5 },
+            { "time": 1785712847119i64, "watt": 12.0 },
+            { "time": 1785709247119i64, "watt": 3.0 },
+        ]});
+        let patch = DeviceKind::Outlet
+            .translate_report("Outlet.powerReport", &data, &TemperatureUnit::F)
+            .unwrap();
+        assert_eq!(patch["power_w"], json!(41.5));
+        // Says nothing about the relay: a power report does not know.
+        assert!(patch.get("on").is_none());
+    }
+
+    /// Newest by timestamp, not by position — the hub's ordering is not a
+    /// documented guarantee.
+    #[test]
+    fn outlet_power_report_picks_newest_not_first() {
+        let data = json!({ "watts": [
+            { "time": 1785709247119i64, "watt": 3.0 },
+            { "time": 1785716447119i64, "watt": 41.5 },
+        ]});
+        let patch = DeviceKind::Outlet
+            .translate_report("Outlet.powerReport", &data, &TemperatureUnit::F)
+            .unwrap();
+        assert_eq!(patch["power_w"], json!(41.5));
+    }
+
+    #[test]
+    fn outlet_power_report_empty_is_none() {
+        let data = json!({ "watts": [] });
+        assert!(DeviceKind::Outlet
+            .translate_report("Outlet.powerReport", &data, &TemperatureUnit::F)
+            .is_none());
+    }
+
+    /// A state-carrying report still goes through the snapshot translator.
+    #[test]
+    fn ordinary_report_still_translates_state() {
+        let data = json!({ "state": "open", "power": 12.5 });
+        let patch = DeviceKind::Outlet
+            .translate_report("Outlet.StatusChange", &data, &TemperatureUnit::F)
+            .unwrap();
+        assert_eq!(patch["on"], json!(true));
+    }
+
+    /// A power report must never reach the snapshot path: publishing it as a
+    /// full retained state would erase `on`.
+    #[test]
+    fn power_report_is_not_a_snapshot() {
+        let data = json!({ "watts": [{ "time": 1i64, "watt": 5.0 }] });
+        assert!(DeviceKind::Outlet
+            .translate_state(&data, &TemperatureUnit::F)
+            .is_none());
+    }
 
     #[test]
     fn outlet_on() {
